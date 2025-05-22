@@ -552,5 +552,3 @@ if __name__ == "__main__":
     # To make files in OUTPUT_DIR accessible via markdown links like `./file=path/to/file.mp3`,
     # Gradio needs to be aware of this directory. `allowed_paths` is one way.
     # The `./file=` prefix is a Gradio convention for serving local files.
-
-```
