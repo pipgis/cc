@@ -1,6 +1,7 @@
 import requests
 import json
 import os
+import logging
 import asyncio
 
 # Attempt to import cloud SDKs, but don't fail if not installed yet.
@@ -21,6 +22,7 @@ try:
 except ImportError:
     texttospeech = None # Placeholder
 
+logger = logging.getLogger(__name__)
 
 # --- Helper Functions for Each Service ---
 
@@ -41,8 +43,10 @@ async def _generate_edge_tts_async(text_to_speak: str, output_filename: str, voi
     try:
         communicate = edge_tts.Communicate(text_to_speak, voice)
         await communicate.save(output_filename)
+        logger.info(f"EdgeTTS successfully generated audio to {output_filename}")
         return {'success': True, 'error': None}
     except Exception as e:
+        logger.error(f"EdgeTTS generation failed for {output_filename}", exc_info=True)
         return {'success': False, 'error': f"EdgeTTS generation failed: {e}"}
 
 def _generate_edge_tts(text_to_speak: str, output_filename: str, voice_gender: str = 'female') -> dict:
@@ -53,10 +57,13 @@ def _generate_edge_tts(text_to_speak: str, output_filename: str, voice_gender: s
         asyncio.run(_generate_edge_tts_async(text_to_speak, output_filename, voice_gender))
         # Check if file was created and has size, as edge_tts.save might not raise error for all failures
         if os.path.exists(output_filename) and os.path.getsize(output_filename) > 0:
+            # Already logged success in async version
             return {'success': True, 'error': None}
         else:
+            logger.error(f"EdgeTTS file not created or empty for {output_filename}, check text or voice.")
             return {'success': False, 'error': "EdgeTTS file not created or empty, check text or voice."}
     except Exception as e:
+        logger.error(f"EdgeTTS asyncio execution failed for {output_filename}", exc_info=True)
         return {'success': False, 'error': f"EdgeTTS asyncio execution failed: {e}"}
 
 
@@ -88,17 +95,21 @@ def _generate_azure_tts(text_to_speak: str, output_filename: str, voice_gender: 
         result = synthesizer.speak_text_async(text_to_speak).get()
 
         if result.reason == ResultReason.SynthesizingAudioCompleted:
+            logger.info(f"Azure TTS successfully generated audio to {output_filename}")
             return {'success': True, 'error': None}
         elif result.reason == ResultReason.Canceled:
             cancellation_details = result.cancellation_details
             error_message = f"Azure TTS synthesis canceled: {cancellation_details.reason}"
             if cancellation_details.reason == CancellationReason.Error:
                 error_message += f" - Error details: {cancellation_details.error_details}"
+            logger.error(f"Azure TTS synthesis canceled for {output_filename}. Details: {error_message}")
             return {'success': False, 'error': error_message}
         else:
+            logger.error(f"Azure TTS synthesis failed for {output_filename} with reason: {result.reason}")
             return {'success': False, 'error': f"Azure TTS synthesis failed with reason: {result.reason}"}
 
     except Exception as e:
+        logger.error(f"Azure TTS generation failed for {output_filename}", exc_info=True)
         return {'success': False, 'error': f"Azure TTS generation failed: {e}"}
 
 
@@ -118,7 +129,7 @@ def _generate_google_tts(text_to_speak: str, output_filename: str, voice_gender:
             # This will work if GOOGLE_APPLICATION_CREDENTIALS env var is set,
             # or if running on GCP with a service account.
             client = texttospeech.TextToSpeechClient() 
-            print("Google TTS: Attempting to use Application Default Credentials.")
+            logger.info("Google TTS: Attempting to use Application Default Credentials.")
 
 
         input_text = texttospeech.SynthesisInput(text=text_to_speak)
@@ -151,9 +162,11 @@ def _generate_google_tts(text_to_speak: str, output_filename: str, voice_gender:
 
         with open(output_filename, "wb") as out:
             out.write(response.audio_content)
+        logger.info(f"Google TTS successfully generated audio to {output_filename}")
         return {'success': True, 'error': None}
 
     except Exception as e:
+        logger.error(f"Google TTS generation failed for {output_filename}", exc_info=True)
         return {'success': False, 'error': f"Google TTS generation failed: {e}"}
 
 
@@ -169,10 +182,9 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, voice_gender
     # This is a hypothetical structure. Replace with actual API endpoint and payload.
     # MINIMAX_TTS_API_URL = "https://api.minimax.ai/v1/text_to_speech" # Example URL
     
-    # print(f"Attempting Minimax TTS for: {text_to_speak[:30]}...")
-    # print(f"Output to: {output_filename}")
-    # print(f"Voice Gender: {voice_gender}, Voice ID: {minimax_voice_id}")
-    # print("Note: Minimax TTS is currently a placeholder and will not produce audio.")
+    logger.info(f"Attempting Minimax TTS for text: \"{text_to_speak[:30]}...\" to file: {output_filename}")
+    logger.info(f"Voice Gender: {voice_gender}, Voice ID: {minimax_voice_id}")
+    logger.warning("Note: Minimax TTS is currently a placeholder and will not produce audio.")
 
     # Example payload structure (needs to be verified with Minimax docs)
     # payload = {
@@ -191,12 +203,16 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, voice_gender
     #     response.raise_for_status()
     #     with open(output_filename, 'wb') as f:
     #         f.write(response.content)
+    #     logger.info(f"Minimax TTS successfully generated audio to {output_filename}")
     #     return {'success': True, 'error': None}
     # except requests.exceptions.RequestException as e:
+    #     logger.error(f"Minimax API request failed for {output_filename}", exc_info=True)
     #     return {'success': False, 'error': f"Minimax API request failed: {e}"}
     # except Exception as e:
+    #     logger.error(f"Minimax TTS processing failed for {output_filename}", exc_info=True)
     #     return {'success': False, 'error': f"Minimax TTS processing failed: {e}"}
     
+    logger.error(f"Minimax TTS not yet implemented. Cannot generate {output_filename}.")
     return {'success': False, 'error': 'Minimax TTS not yet implemented or API details needed.'}
 
 
@@ -219,11 +235,13 @@ def generate_audio(text_to_speak: str, output_filename: str, service: str,
     try:
         output_dir = os.path.dirname(output_filename)
         if output_dir and not os.path.exists(output_dir):
+            logger.info(f"Creating output directory: {output_dir}")
             os.makedirs(output_dir, exist_ok=True)
     except Exception as e:
+        logger.error(f"Failed to create output directory for {output_filename}", exc_info=True)
         return {'success': False, 'error': f"Failed to create output directory for {output_filename}: {e}"}
 
-
+    logger.info(f"Generating audio for text: \"{text_to_speak[:30]}...\" using service: {service} to file: {output_filename}")
     service = service.lower()
     if service == "edge_tts":
         return _generate_edge_tts(text_to_speak, output_filename, voice_gender)
@@ -235,93 +253,85 @@ def generate_audio(text_to_speak: str, output_filename: str, service: str,
         return _generate_minimax_tts(text_to_speak, output_filename, voice_gender, 
                                      minimax_api_key, minimax_group_id, minimax_voice_id)
     else:
+        logger.error(f"Unsupported TTS service requested: {service}")
         return {'success': False, 'error': f"Unsupported TTS service: {service}"}
 
 
 # --- Test Block ---
 if __name__ == '__main__':
-    sample_chinese_text = "你好，这是一个测试语音。今天天气怎么样？希望你能喜欢这个声音。"
-    output_dir = "tts_output" # Relative to where the script is run
-    # Ensure the output directory exists for the test
-    # The generate_audio function also does this, but good for clarity here.
-    os.makedirs(output_dir, exist_ok=True) 
-    print(f"Created output directory: {os.path.abspath(output_dir)}")
+    # Basic setup for testing this module directly
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    print("\n--- Testing EdgeTTS ---")
+    sample_chinese_text = "你好，这是一个测试语音。今天天气怎么样？希望你能喜欢这个声音。"
+    output_dir = "tts_output" 
+    os.makedirs(output_dir, exist_ok=True) 
+    logger.info(f"Created output directory: {os.path.abspath(output_dir)}")
+
+    logger.info("\n--- Testing EdgeTTS ---")
     if edge_tts:
         edge_output_file_female = os.path.join(output_dir, "edge_tts_female_test.mp3")
         edge_result_female = generate_audio(sample_chinese_text, edge_output_file_female, "edge_tts", voice_gender="female")
-        print(f"EdgeTTS (Female) Result: {edge_result_female}")
+        logger.info(f"EdgeTTS (Female) Result: {edge_result_female}")
         if edge_result_female['success']:
-            print(f"  Output: {os.path.abspath(edge_output_file_female)}")
+            logger.info(f"  Output: {os.path.abspath(edge_output_file_female)}")
 
         edge_output_file_male = os.path.join(output_dir, "edge_tts_male_test.mp3")
         edge_result_male = generate_audio(sample_chinese_text, edge_output_file_male, "edge_tts", voice_gender="male")
-        print(f"EdgeTTS (Male) Result: {edge_result_male}")
+        logger.info(f"EdgeTTS (Male) Result: {edge_result_male}")
         if edge_result_male['success']:
-            print(f"  Output: {os.path.abspath(edge_output_file_male)}")
+            logger.info(f"  Output: {os.path.abspath(edge_output_file_male)}")
     else:
-        print("EdgeTTS library not found. Skipping EdgeTTS tests. Install with: pip install edge-tts")
+        logger.warning("EdgeTTS library not found. Skipping EdgeTTS tests. Install with: pip install edge-tts")
     
-    # --- Placeholder for Azure ---
-    print("\n--- Testing Azure TTS (Placeholder) ---")
-    # Replace with your actual key and region to test
+    logger.info("\n--- Testing Azure TTS (Placeholder) ---")
     azure_api_key_test = os.environ.get("AZURE_SPEECH_KEY") or "YOUR_AZURE_SPEECH_KEY" 
     azure_region_test = os.environ.get("AZURE_SPEECH_REGION") or "YOUR_AZURE_REGION"
 
     if not SpeechConfig:
-        print("azure-cognitiveservices-speech library not found. Skipping Azure TTS tests. Install with: pip install azure-cognitiveservices-speech")
+        logger.warning("azure-cognitiveservices-speech library not found. Skipping Azure TTS tests. Install with: pip install azure-cognitiveservices-speech")
     elif azure_api_key_test == "YOUR_AZURE_SPEECH_KEY" or azure_region_test == "YOUR_AZURE_REGION":
-        print(f"Azure credentials not set (use env vars AZURE_SPEECH_KEY, AZURE_SPEECH_REGION or edit script). Skipping.")
+        logger.warning(f"Azure credentials not set (use env vars AZURE_SPEECH_KEY, AZURE_SPEECH_REGION or edit script). Skipping.")
     else:
-        print(f"Attempting Azure TTS with key: '...{azure_api_key_test[-4:]}' and region: '{azure_region_test}'")
+        logger.info(f"Attempting Azure TTS with key: '...{azure_api_key_test[-4:]}' and region: '{azure_region_test}'")
         azure_output_file = os.path.join(output_dir, "azure_tts_female_test.mp3")
         azure_result = generate_audio(sample_chinese_text, azure_output_file, "azure", 
                                       voice_gender="female", api_key=azure_api_key_test, azure_region=azure_region_test)
-        print(f"AzureTTS (Female) Result: {azure_result}")
+        logger.info(f"AzureTTS (Female) Result: {azure_result}")
         if azure_result['success']:
-            print(f"  Output: {os.path.abspath(azure_output_file)}")
+            logger.info(f"  Output: {os.path.abspath(azure_output_file)}")
 
-    # --- Placeholder for Google Cloud TTS ---
-    print("\n--- Testing Google Cloud TTS (Placeholder) ---")
-    # Set GOOGLE_APPLICATION_CREDENTIALS environment variable to the path of your JSON credentials file
-    google_creds_path_test = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") # or "path/to/your/credentials.json"
+    logger.info("\n--- Testing Google Cloud TTS (Placeholder) ---")
+    google_creds_path_test = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") 
 
     if not texttospeech:
-        print("google-cloud-texttospeech library not found. Skipping Google TTS tests. Install with: pip install google-cloud-texttospeech")
+        logger.warning("google-cloud-texttospeech library not found. Skipping Google TTS tests. Install with: pip install google-cloud-texttospeech")
     elif not google_creds_path_test:
-        print("GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Skipping Google TTS test.")
-        print("Alternatively, ensure you are authenticated for ADC if running on GCP or with gcloud CLI.")
+        logger.warning("GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Skipping Google TTS test.")
+        logger.warning("Alternatively, ensure you are authenticated for ADC if running on GCP or with gcloud CLI.")
     else:
-        print(f"Attempting Google TTS with credentials from: '{google_creds_path_test}'")
+        logger.info(f"Attempting Google TTS with credentials from: '{google_creds_path_test}'")
         google_output_file = os.path.join(output_dir, "google_tts_female_test.mp3")
         google_result = generate_audio(sample_chinese_text, google_output_file, "google", 
                                        voice_gender="female", google_credentials_path=google_creds_path_test)
-        print(f"GoogleTTS (Female) Result: {google_result}")
+        logger.info(f"GoogleTTS (Female) Result: {google_result}")
         if google_result['success']:
-            print(f"  Output: {os.path.abspath(google_output_file)}")
+            logger.info(f"  Output: {os.path.abspath(google_output_file)}")
 
-    # --- Placeholder for Minimax TTS ---
-    print("\n--- Testing Minimax TTS (Placeholder) ---")
-    # Replace with your actual keys/IDs to test
+    logger.info("\n--- Testing Minimax TTS (Placeholder) ---")
     minimax_api_key_test = os.environ.get("MINIMAX_API_KEY") or "YOUR_MINIMAX_API_KEY"
     minimax_group_id_test = os.environ.get("MINIMAX_GROUP_ID") or "YOUR_MINIMAX_GROUP_ID"
-    # minimax_voice_id_test = "some_voice_id_for_chinese_female" # Example
 
     if minimax_api_key_test == "YOUR_MINIMAX_API_KEY" or minimax_group_id_test == "YOUR_MINIMAX_GROUP_ID":
-        print("Minimax credentials not set (use env vars MINIMAX_API_KEY, MINIMAX_GROUP_ID or edit script). Skipping.")
+        logger.warning("Minimax credentials not set (use env vars MINIMAX_API_KEY, MINIMAX_GROUP_ID or edit script). Skipping.")
     else:
-        print(f"Attempting Minimax TTS with API key '...{minimax_api_key_test[-4:]}' and Group ID '{minimax_group_id_test}'")
+        logger.info(f"Attempting Minimax TTS with API key '...{minimax_api_key_test[-4:]}' and Group ID '{minimax_group_id_test}'")
         minimax_output_file = os.path.join(output_dir, "minimax_tts_female_test.mp3")
-        # Note: _generate_minimax_tts is currently a placeholder and will return an error.
         minimax_result = generate_audio(sample_chinese_text, minimax_output_file, "minimax",
                                         voice_gender="female", 
                                         minimax_api_key=minimax_api_key_test, 
                                         minimax_group_id=minimax_group_id_test)
-                                        # minimax_voice_id=minimax_voice_id_test)
-        print(f"MinimaxTTS (Female) Result: {minimax_result}")
-        # No output path check here as it's expected to fail for now.
+        logger.info(f"MinimaxTTS (Female) Result: {minimax_result}")
 
-    print("\n--- Finished TTS Tests ---")
-    print(f"Please check the '{output_dir}' directory for any generated MP3 files.")
-    print("For cloud services, ensure you have installed their respective SDKs (e.g., pip install azure-cognitiveservices-speech google-cloud-texttospeech) and configured credentials.")
+    logger.info("\n--- Finished TTS Tests ---")
+    logger.info(f"Please check the '{output_dir}' directory for any generated MP3 files.")
+    logger.info("For cloud services, ensure you have installed their respective SDKs (e.g., pip install azure-cognitiveservices-speech google-cloud-texttospeech) and configured credentials.")

@@ -10,3 +10,4 @@ google-cloud-texttospeech
 # Add ollama if a specific client library was intended for it,
 # but current implementation uses 'requests' for Ollama.
 # No specific client for OpenRouter, Minimax TTS in current code (uses 'requests').
+python-dotenv
