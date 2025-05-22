@@ -323,6 +323,31 @@ def handle_generate_audio_subtitles(
     return generation_log, output_links_markdown
 
 
+def handle_textbox_selection(text_input_indices_str: str, current_news_data: list) -> list:
+    """
+    Parses a comma-separated string of indices, validates them, and returns a list of valid integer indices.
+    """
+    if not text_input_indices_str or not text_input_indices_str.strip():
+        return [] # Return empty list if input is empty
+
+    valid_indices = []
+    parts = text_input_indices_str.split(',')
+    for part in parts:
+        try:
+            index = int(part.strip())
+            if 0 <= index < len(current_news_data):
+                if index not in valid_indices: # Avoid duplicates if user types "0,0,1"
+                    valid_indices.append(index)
+            else:
+                # Optionally, log or notify about invalid index range
+                print(f"Warning: Index {index} is out of range for current news data (size {len(current_news_data)}).")
+        except ValueError:
+            # Optionally, log or notify about non-integer input
+            print(f"Warning: Non-integer value '{part}' found in selection input.")
+            # Depending on desired behavior, could return previous state or just skip invalid part
+    return valid_indices
+
+
 # --- Gradio UI Definition ---
 with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle Generator") as app_ui:
     gr.Markdown("# News Aggregator and Audio/Subtitle Generator")
@@ -432,7 +457,14 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             
             # Let's try to use the select event of the DataFrame
             # This hidden textbox will store the selected row indices from the DataFrame
-            selected_df_indices_state = gr.State([]) 
+            selected_df_indices_state = gr.State([])
+
+            # Event handler for manual text input of indices
+            selected_news_indices_input.submit(
+                handle_textbox_selection,
+                inputs=[selected_news_indices_input, news_data_state_gr],
+                outputs=[selected_df_indices_state]
+            )
 
             def handle_df_selection(evt: gr.SelectData, current_news_data: list):
                 # evt.index contains (row_index, col_index) if a cell is clicked
