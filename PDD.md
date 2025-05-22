@@ -45,6 +45,11 @@
     *   Display area for the list of fetched/processed news items.
     *   Controls to initiate news fetching, summarization (if desired), audio generation, and subtitle creation.
     *   Download links for generated MP3, SRT, and LRC files.
+*   **Configuration Management:**
+    *   The application now saves user-defined configurations (API keys, service choices, paths) locally in a file named `app_config.json`.
+    *   This configuration is automatically loaded when the application starts, populating the fields in the 'Configuration' tab.
+    *   A "Save Configuration" button in the 'Configuration' tab allows users to persist their current settings.
+    *   To protect sensitive information, `app_config.json` is included in the project's `.gitignore` file and should not be version controlled.
 
 ## 4. Technical Specifications
 
@@ -56,7 +61,13 @@
     *   TTS APIs: `azure-cognitiveservices-speech`, `google-cloud-tts`, `requests` (for Minimax or other REST-based TTS). Consider `edge-tts` or `pyttsx3` as potential fallbacks or simpler options if direct API integration is complex or for local testing.
     *   Audio Processing: `pydub` (for MP3 handling if needed).
     *   GUI: `gradio`
-*   Data Handling: In-memory for processing, direct file downloads for outputs.
+*   Data Handling: In-memory for processing, direct file downloads for outputs. Configuration data is persisted in `app_config.json`.
+*   **Logging:**
+    *   The application utilizes Python's built-in `logging` module for robust event tracking and diagnostics.
+    *   Log messages are output to a file named `app.log` (configured with UTF-8 encoding) and simultaneously to the console.
+    *   Log entries include timestamps, logger name, log level, and the message.
+    *   This replaces previous `print()` statements, providing a more structured and manageable way to monitor application behavior and troubleshoot issues.
+    *   The `app.log` file is included in `.gitignore`.
 
 ## 5. User Interface (UI) Design Sketch (Conceptual)
 
@@ -96,5 +107,4 @@
 *   Support for more news sources/APIs.
 *   Batch processing controls.
 *   More advanced subtitle customization.
-*   Saving/loading user configurations.
 *   Support for more TTS engines.

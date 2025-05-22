@@ -1,5 +1,7 @@
 import gradio as gr
 import os
+import json
+import logging
 from datetime import datetime
 import pandas as pd # For DataFrame
 from mutagen.mp3 import MP3 # For getting audio duration
@@ -20,35 +22,83 @@ import subtitle_generator
 # This will be used to populate the DataFrame and for processing.
 global_news_items_store = []
 OUTPUT_DIR = "generated_files"
+CONFIG_FILE = "app_config.json"
+LOG_FILE = "app.log"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- Configuration State (managed by Gradio inputs) ---
-# API keys and settings will be read directly from Gradio input components within handler functions.
+# --- Logging Configuration ---
+logger = logging.getLogger('NewsAppLogger')
+logger.setLevel(logging.INFO)
+
+# File Handler
+fh = logging.FileHandler(LOG_FILE, encoding='utf-8')
+fh.setLevel(logging.INFO)
+
+# Console Handler
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO) # Can be set to DEBUG for more console verbosity if needed
+
+# Formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                              datefmt='%Y-%m-%d %H:%M:%S')
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+
+# Add handlers to the logger
+logger.addHandler(fh)
+logger.addHandler(ch)
+
+logger.info("Application starting. Logging configured.")
+
+# --- Configuration Helper Functions ---
+def save_config(config_data: dict, filename: str = CONFIG_FILE):
+    """Saves configuration data to a JSON file."""
+    try:
+        with open(filename, "w") as f:
+            json.dump(config_data, f, indent=4)
+        return True
+    except IOError:
+        return False
+
+def load_config(filename: str = CONFIG_FILE) -> dict:
+    """Loads configuration data from a JSON file."""
+    if not os.path.exists(filename):
+        return {}
+    try:
+        with open(filename, "r") as f:
+            return json.load(f)
+    except (IOError, json.JSONDecodeError):
+        return {}
+
+# Load initial configuration
+loaded_configs = load_config()
 
 # --- Handler Functions ---
 
-def handle_save_configuration(gemini_key, openrouter_key, azure_key, azure_region, 
-                              google_tts_path, minimax_key, minimax_group_id, ollama_url):
+def handle_save_configuration(gemini_key, openrouter_key, ollama_url, 
+                              azure_key, azure_region, google_tts_path, 
+                              minimax_key, minimax_group_id):
     """
     Handles the "Save Configuration" button click.
-    For now, this function is a placeholder. In a real app, it might save to a file or db.
-    Here, it just demonstrates reading the values.
+    Saves configuration to app_config.json.
     """
-    # In a real app, you'd securely store these. For now, they are passed to handlers.
-    # This function could return a status message.
-    config_summary = (
-        f"Gemini Key: {'Set' if gemini_key else 'Not Set'}\n"
-        f"OpenRouter Key: {'Set' if openrouter_key else 'Not Set'}\n"
-        f"Azure Key: {'Set' if azure_key else 'Not Set'}\n"
-        f"Azure Region: {azure_region}\n"
-        f"Google TTS Path: {google_tts_path}\n"
-        f"Minimax Key: {'Set' if minimax_key else 'Not Set'}\n"
-        f"Minimax Group ID: {minimax_group_id}\n"
-        f"Ollama URL: {ollama_url}"
-    )
-    print("Configuration handling (not saved persistently in this version):")
-    print(config_summary)
-    return f"Configuration values acknowledged (not saved persistently).\n{config_summary}"
+    config_data = {
+        "gemini_key": gemini_key,
+        "openrouter_key": openrouter_key,
+        "ollama_url": ollama_url,
+        "azure_tts_key": azure_key,
+        "azure_tts_region": azure_region,
+        "google_tts_path": google_tts_path,
+        "minimax_key": minimax_key,
+        "minimax_group_id": minimax_group_id,
+        # Add any other config values you want to save
+    }
+    if save_config(config_data):
+        logger.info("Configuration saved successfully to app_config.json.")
+        return "Configuration saved successfully to app_config.json."
+    else:
+        logger.error("Error: Could not save configuration.")
+        return "Error: Could not save configuration."
 
 
 def handle_fetch_news(urls_text_input):
@@ -57,21 +107,30 @@ def handle_fetch_news(urls_text_input):
     Updates the news display DataFrame and status.
     """
     global global_news_items_store # Use the global store
+    status_messages = [] # Collect messages for logging and returning
 
     if not urls_text_input or not urls_text_input.strip():
-        return pd.DataFrame(), "Status: Please enter some URLs or RSS feed links.", []
+        msg = "Status: Please enter some URLs or RSS feed links."
+        logger.warning(msg)
+        return pd.DataFrame(), msg, []
 
     sources = [url.strip() for url in urls_text_input.strip().split('\n') if url.strip()]
     if not sources:
-        return pd.DataFrame(), "Status: No valid URLs provided.", []
+        msg = "Status: No valid URLs provided."
+        logger.warning(msg)
+        return pd.DataFrame(), msg, []
     
-    status_log = f"Fetching news from {len(sources)} source(s)...\n"
+    msg = f"Fetching news from {len(sources)} source(s)..."
+    logger.info(msg)
+    status_messages.append(msg)
     
     try:
         fetched_items_raw = news_fetcher.fetch_news(sources)
     except Exception as e:
-        status_log += f"An error occurred during fetching: {e}\n"
-        return pd.DataFrame(), status_log, []
+        msg = f"An error occurred during fetching: {e}"
+        logger.exception("Exception during news fetching:") # Logs error with stack trace
+        status_messages.append(msg)
+        return pd.DataFrame(), "\n".join(status_messages), []
 
     # Clear previous items and add new ones with an ID
     global_news_items_store = []
@@ -79,14 +138,16 @@ def handle_fetch_news(urls_text_input):
     item_id_counter = 0
 
     if not fetched_items_raw:
-        status_log += "No items were fetched. Check URLs and network.\n"
-        return pd.DataFrame(), status_log, []
+        msg = "No items were fetched. Check URLs and network."
+        logger.info(msg)
+        status_messages.append(msg)
+        return pd.DataFrame(), "\n".join(status_messages), []
 
     for item in fetched_items_raw:
         if item.get('error'):
-            status_log += f"Error for {item.get('source_url', 'Unknown source')}: {item['error']}\n"
-            # Optionally, still add error items to the list for visibility, or skip them
-            # For now, let's skip adding errored items directly to the selectable DataFrame
+            msg = f"Error for {item.get('source_url', 'Unknown source')}: {item['error']}"
+            logger.warning(msg)
+            status_messages.append(msg)
             continue
 
         processed_item = {
@@ -95,16 +156,12 @@ def handle_fetch_news(urls_text_input):
             'summary': item.get('summary', 'N/A')[:150] + "..." if item.get('summary') else 'N/A', # Truncate summary
             'source_url': item.get('source_url', 'N/A'),
             'published_date': item.get('published_date', 'N/A'),
-            # Store the full summary for processing, not just the truncated one
             '_full_summary': item.get('summary', 'N/A'), 
-            '_original_title': item.get('title', 'N/A') # Keep original for processing
+            '_original_title': item.get('title', 'N/A') 
         }
         global_news_items_store.append(processed_item)
-        # For DataFrame, we might only want to show certain fields or add a selection checkbox column
-        # Gradio's DataFrame doesn't directly support a checkbox column for selection in the same way
-        # a CheckboxGroup would. We'll use row selection property of DataFrame.
         valid_items_for_df.append({
-            "ID": item_id_counter, # For user display & selection reference
+            "ID": item_id_counter,
             "Title": processed_item['title'],
             "Summary Snippet": processed_item['summary'],
             "Source": processed_item['source_url'],
@@ -112,198 +169,180 @@ def handle_fetch_news(urls_text_input):
         })
         item_id_counter += 1
         
-    status_log += f"Fetched {len(valid_items_for_df)} valid news items.\n"
+    msg = f"Fetched {len(valid_items_for_df)} valid news items."
+    logger.info(msg)
+    status_messages.append(msg)
     
     if not valid_items_for_df:
         news_df = pd.DataFrame()
-        status_log += "No valid news items could be processed into the display table.\n"
+        msg = "No valid news items could be processed into the display table."
+        logger.info(msg)
+        status_messages.append(msg)
     else:
         news_df = pd.DataFrame(valid_items_for_df)
 
-    return news_df, status_log, global_news_items_store # Return store to update a gr.State if used for selection
+    return news_df, "\n".join(status_messages), global_news_items_store
 
 
 def handle_generate_audio_subtitles(
-    selected_indices, # This will come from gr.DataFrame(interactive=True) selection event
-    news_data_state,  # This will be the global_news_items_store passed via gr.State
+    selected_indices, 
+    news_data_state, 
     news_topic,
-    summarizer_choice, ollama_model_name, ollama_api_url_cfg, # Summarizer params
-    gemini_api_key_cfg, openrouter_api_key_cfg,             # Summarizer API keys
-    tts_service, tts_voice_gender,                          # TTS params
-    azure_tts_key_cfg, azure_tts_region_cfg,                # TTS API keys
-    google_tts_path_cfg, minimax_tts_key_cfg, minimax_tts_group_id_cfg # TTS API keys
+    summarizer_choice, ollama_model_name, ollama_api_url_cfg,
+    gemini_api_key_cfg, openrouter_api_key_cfg,            
+    tts_service, tts_voice_gender,                         
+    azure_tts_key_cfg, azure_tts_region_cfg,               
+    google_tts_path_cfg, minimax_tts_key_cfg, minimax_tts_group_id_cfg
 ):
     """
     Generates audio and subtitles for selected news items.
     """
-    generation_log = "Starting generation process...\n"
+    log_messages = [] # For returning to Gradio Textbox
     output_links_markdown = ""
+    logger.info("Starting generation process...")
+    log_messages.append("Starting generation process...")
 
-    if not selected_indices: # Check if selection event data is valid (now expects a list)
-        generation_log += "No news items selected for generation.\n"
-        return generation_log, ""
-
-    # selected_indices from a gr.DataFrame selection event is a dict like {'index': (row_index, col_index), 'value': cell_value}
-    # We are interested in row_indices if the selection mode is per row, or we need a different way.
-    # For now, let's assume selected_indices is a list of IDs from the DataFrame.
-    # This part needs careful handling based on how gr.DataFrame selection events provide data.
-    # If gr.DataFrame `interactive=True` is used with `select` event, it gives row indices.
+    if not selected_indices:
+        msg = "No news items selected for generation."
+        logger.warning(msg)
+        log_messages.append(msg)
+        return "\n".join(log_messages), ""
     
-    # For this example, let's assume selected_indices is a list of item IDs (0, 1, 2...)
-    # This might need to be adjusted based on actual Gradio event data for DataFrame selection.
-    # The PDD mentioned checkboxes; a CheckboxGroup might be better if direct DataFrame selection is tricky.
-    # Using the 'select' event on gr.DataFrame returns a SelectData object.
-    # For now, let's assume selected_indices is a list of the 'ID' column values from the selected rows.
-    # This part of the code will need refinement once the UI interaction is tested.
-    # For now, we'll use the indices directly from the event if it's a simple list of row numbers.
-    
-    # The `news_data_state` (global_news_items_store) contains dicts with 'id', 'title', '_full_summary', etc.
     actual_selected_items = []
-    if isinstance(selected_indices, list): # If we get a list of selected row indices
+    if isinstance(selected_indices, list):
         for index in selected_indices:
             if 0 <= index < len(news_data_state):
                 actual_selected_items.append(news_data_state[index])
             else:
-                generation_log += f"Warning: Invalid selected index {index} ignored.\n"
-    else: # If it's not a list (e.g. from a single select event) - this needs more robust handling
-        generation_log += "Selection format not as expected. Please select rows in the table.\n"
-        # Attempt to handle single selection from DataFrame click if applicable
-        # This part is highly dependent on Gradio's event data structure for DataFrame selection
-        # For now, we'll proceed assuming `actual_selected_items` gets populated correctly.
-        # A gr.CheckboxGroup that outputs the IDs of selected items would be more straightforward.
-        # If `selected_indices` is from `gr.DataFrame(...).select`, it's `evt: gr.SelectData`.
-        # `evt.index[0]` would be the row index.
-        # For now, let's assume `selected_indices` is the list of actual item dictionaries for simplicity.
-        # This is a placeholder for proper selection handling.
-        # A simple workaround: iterate through ALL news_data_state and check a hypothetical 'selected' flag
-        # This means the DataFrame selection needs to update this flag. That's complex.
-        # Let's assume `selected_indices` IS the list of indices from the DataFrame.
-        # And `news_data_state` is the current full list of news items.
-        
-        # Simpler approach for now: Assume selected_indices is a list of IDs.
-        # This requires the DataFrame to output selected IDs.
-        # The current setup with global_news_items_store and its 'id' field.
-        # This is a placeholder and needs to be correctly wired with Gradio DataFrame selection.
-        # For now, let's assume `selected_indices` is a list of `id`s from the DataFrame.
-        # This is a placeholder:
+                msg = f"Warning: Invalid selected index {index} ignored."
+                logger.warning(msg)
+                log_messages.append(msg)
+    else:
+        msg = "Selection format not as expected. Please select rows in the table."
+        logger.warning(msg)
+        log_messages.append(msg)
         if not news_data_state:
-             generation_log += "News data is empty. Fetch news first.\n"
-             return generation_log, ""
-        
-        # Mocking selection: take the first item if nothing "properly" selected.
-        # THIS IS A MAJOR SIMPLIFICATION to get the rest of the logic flowing.
-        # In a real scenario, you'd use gr.CheckboxGroup or handle DataFrame selection events properly.
-        if not actual_selected_items and news_data_state:
-            generation_log += "Warning: No specific items selected or selection mechanism not fully wired. Processing first item as a fallback for testing.\n"
-            actual_selected_items.append(news_data_state[0]) # Process first item as a test
+            msg = "News data is empty. Fetch news first."
+            logger.error(msg) # Changed to error as it's a prerequisite
+            log_messages.append(msg)
+            return "\n".join(log_messages), ""
+        if not actual_selected_items and news_data_state: # Fallback logic
+            msg = "Warning: No specific items selected or selection mechanism not fully wired. Processing first item as a fallback for testing."
+            logger.warning(msg)
+            log_messages.append(msg)
+            actual_selected_items.append(news_data_state[0])
 
     if not actual_selected_items:
-        generation_log += "No news items to process after selection logic.\n"
-        return generation_log, ""
+        msg = "No news items to process after selection logic."
+        logger.warning(msg)
+        log_messages.append(msg)
+        return "\n".join(log_messages), ""
 
-    generation_log += f"Processing {len(actual_selected_items)} selected news item(s).\n"
+    msg = f"Processing {len(actual_selected_items)} selected news item(s)."
+    logger.info(msg)
+    log_messages.append(msg)
 
     for item in actual_selected_items:
         original_title = item.get('_original_title', 'Untitled')
         text_for_tts = item.get('_original_title', '') + ". " + item.get('_full_summary', '')
-        generation_log += f"\nProcessing: {original_title}\n"
+        item_log_prefix = f"Processing: {original_title}"
+        logger.info(item_log_prefix)
+        log_messages.append(f"\n{item_log_prefix}")
 
-        # 1. Summarization (Optional)
         if summarizer_choice != "None" and text_for_tts.strip():
-            generation_log += f"  Attempting summarization with {summarizer_choice}...\n"
+            msg = f"  Attempting summarization with {summarizer_choice}..."
+            logger.info(msg)
+            log_messages.append(msg)
             summary_result = summarizer.summarize_text(
-                text_to_summarize=text_for_tts,
-                service=summarizer_choice,
+                text_to_summarize=text_for_tts, service=summarizer_choice,
                 api_key=(gemini_api_key_cfg if summarizer_choice == "gemini" else openrouter_api_key_cfg if summarizer_choice == "openrouter" else None),
-                ollama_model=ollama_model_name,
-                ollama_api_url=ollama_api_url_cfg,
-                # openrouter_model can be added if you want to specify it
+                ollama_model=ollama_model_name, ollama_api_url=ollama_api_url_cfg,
             )
             if summary_result['error']:
-                generation_log += f"  Summarization Error: {summary_result['error']}\n"
+                msg = f"  Summarization Error: {summary_result['error']}"
+                logger.error(msg)
+                log_messages.append(msg)
             else:
-                text_for_tts = summary_result['summary'] # Use summarized text
-                generation_log += f"  Summarization Successful. New text length: {len(text_for_tts)}\n"
+                text_for_tts = summary_result['summary']
+                msg = f"  Summarization Successful. New text length: {len(text_for_tts)}"
+                logger.info(msg)
+                log_messages.append(msg)
         
-        # 2. Generate Filename Base
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         topic_prefix = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
-        # Sanitize title for filename
-        safe_title_part = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip()
-        safe_title_part = safe_title_part.replace(' ', '_')
-        
+        safe_title_part = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip().replace(' ', '_')
         base_filename = f"{timestamp}_{topic_prefix}{safe_title_part}"
-        
         mp3_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.mp3")
         srt_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.srt")
         lrc_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.lrc")
 
-        # 3. Text-to-Speech
-        generation_log += f"  Generating audio with {tts_service} ({tts_voice_gender})...\n"
+        msg = f"  Generating audio with {tts_service} ({tts_voice_gender})..."
+        logger.info(msg)
+        log_messages.append(msg)
         tts_result = tts_generator.generate_audio(
-            text_to_speak=text_for_tts,
-            output_filename=mp3_filename,
-            service=tts_service,
-            voice_gender=tts_voice_gender,
+            text_to_speak=text_for_tts, output_filename=mp3_filename, service=tts_service, voice_gender=tts_voice_gender,
             api_key=(azure_tts_key_cfg if tts_service == "azure" else minimax_tts_key_cfg if tts_service == "minimax" else None),
-            azure_region=azure_tts_region_cfg,
-            google_credentials_path=google_tts_path_cfg,
+            azure_region=azure_tts_region_cfg, google_credentials_path=google_tts_path_cfg,
             minimax_group_id=minimax_tts_group_id_cfg
-            # minimax_voice_id can be added if needed
         )
 
         if tts_result['success']:
-            generation_log += f"  Audio generated: {mp3_filename}\n"
-            
-            # Get audio duration (CRITICAL for subtitles)
+            msg = f"  Audio generated: {mp3_filename}"
+            logger.info(msg)
+            log_messages.append(msg)
             audio_duration_seconds = 0
             try:
                 if os.path.exists(mp3_filename):
                     audio = MP3(mp3_filename)
                     audio_duration_seconds = audio.info.length
-                    generation_log += f"  Audio duration: {audio_duration_seconds:.2f} seconds.\n"
-                else: # Should not happen if tts_result is success
-                    generation_log += "  Error: MP3 file not found after TTS success reported.\n"
+                    msg = f"  Audio duration: {audio_duration_seconds:.2f} seconds."
+                    logger.info(msg)
+                    log_messages.append(msg)
+                else:
+                    msg = "  Error: MP3 file not found after TTS success reported."
+                    logger.error(msg)
+                    log_messages.append(msg)
             except Exception as e:
-                generation_log += f"  Error getting audio duration: {e}. Subtitles might be misaligned.\n"
-                # Fallback: estimate duration (e.g., 10 words per second, very rough)
-                # This is a very poor substitute for actual duration.
+                msg = f"  Error getting audio duration: {e}. Subtitles might be misaligned."
+                logger.exception("Exception during audio duration reading:")
+                log_messages.append(msg)
                 if audio_duration_seconds == 0 and text_for_tts:
-                    estimated_duration = len(text_for_tts.split()) / 4.0 # Rough estimate
-                    audio_duration_seconds = max(1.0, estimated_duration) # Ensure at least 1s
-                    generation_log += f"  Using estimated duration: {audio_duration_seconds:.2f}s for subtitles.\n"
-
+                    estimated_duration = len(text_for_tts.split()) / 4.0 
+                    audio_duration_seconds = max(1.0, estimated_duration)
+                    msg = f"  Using estimated duration: {audio_duration_seconds:.2f}s for subtitles."
+                    logger.warning(msg)
+                    log_messages.append(msg)
 
             if audio_duration_seconds > 0:
-                # 4. Subtitle Generation
-                generation_log += f"  Generating SRT subtitles...\n"
+                msg = f"  Generating SRT subtitles..."
+                logger.info(msg)
+                log_messages.append(msg)
                 srt_result = subtitle_generator.generate_srt(text_for_tts, audio_duration_seconds, srt_filename)
                 if srt_result['success']:
-                    generation_log += f"  SRT generated: {srt_filename}\n"
+                    msg = f"  SRT generated: {srt_filename}"
+                    logger.info(msg)
+                    log_messages.append(msg)
                 else:
-                    generation_log += f"  SRT Generation Error: {srt_result['error']}\n"
+                    msg = f"  SRT Generation Error: {srt_result['error']}"
+                    logger.error(msg)
+                    log_messages.append(msg)
 
-                generation_log += f"  Generating LRC subtitles...\n"
+                msg = f"  Generating LRC subtitles..."
+                logger.info(msg)
+                log_messages.append(msg)
                 lrc_result = subtitle_generator.generate_lrc(text_for_tts, audio_duration_seconds, lrc_filename)
                 if lrc_result['success']:
-                    generation_log += f"  LRC generated: {lrc_filename}\n"
+                    msg = f"  LRC generated: {lrc_filename}"
+                    logger.info(msg)
+                    log_messages.append(msg)
                 else:
-                    generation_log += f"  LRC Generation Error: {lrc_result['error']}\n"
+                    msg = f"  LRC Generation Error: {lrc_result['error']}"
+                    logger.error(msg)
+                    log_messages.append(msg)
                 
-                # Add to markdown links (Gradio can serve files from the script's directory or subdirs)
-                # For downloadable links, Gradio needs paths relative to where app is run or absolute if configured.
-                # Using relative paths to OUTPUT_DIR.
-                # The `file_paths` parameter in `gr.File` or `gr.DownloadButton` would be better.
-                # For `gr.Markdown`, we need to ensure these paths are accessible via HTTP.
-                # Gradio can serve files if `allowed_paths` is set or if they are in `gradio.Blocks(allowed_paths=[OUTPUT_DIR])`
-                # Or by returning `gr.File` components.
-                # For now, just list them. Direct download might need `gr.File` output.
                 output_links_markdown += f"**{original_title}**:\n"
                 if tts_result['success']:
-                    # These links might not work directly in Markdown without Gradio serving them.
-                    # A better approach is to return gr.File components or use gr.DownloadButton.
-                    # This is a placeholder for demonstrating file paths.
-                    mp3_link = f"[{os.path.basename(mp3_filename)}](./file={mp3_filename})" # Gradio specific link
+                    mp3_link = f"[{os.path.basename(mp3_filename)}](./file={mp3_filename})"
                     output_links_markdown += f"  - Audio: {mp3_link}\n"
                 if srt_result.get('success'):
                     srt_link = f"[{os.path.basename(srt_filename)}](./file={srt_filename})"
@@ -312,15 +351,20 @@ def handle_generate_audio_subtitles(
                     lrc_link = f"[{os.path.basename(lrc_filename)}](./file={lrc_filename})"
                     output_links_markdown += f"  - LRC: {lrc_link}\n"
                 output_links_markdown += "\n"
-
-            else: # audio_duration_seconds <= 0
-                generation_log += "  Skipping subtitle generation due to missing audio duration.\n"
+            else:
+                msg = "  Skipping subtitle generation due to missing audio duration."
+                logger.warning(msg)
+                log_messages.append(msg)
         else:
-            generation_log += f"  TTS Error: {tts_result['error']}\n"
+            msg = f"  TTS Error: {tts_result['error']}"
+            logger.error(msg)
+            log_messages.append(msg)
             output_links_markdown += f"**{original_title}**: Audio generation failed.\n\n"
             
-    generation_log += "\nGeneration process finished.\n"
-    return generation_log, output_links_markdown
+    final_msg = "\nGeneration process finished."
+    logger.info(final_msg)
+    log_messages.append(final_msg)
+    return "\n".join(log_messages), output_links_markdown
 
 
 def handle_textbox_selection(text_input_indices_str: str, current_news_data: list) -> list:
@@ -328,7 +372,8 @@ def handle_textbox_selection(text_input_indices_str: str, current_news_data: lis
     Parses a comma-separated string of indices, validates them, and returns a list of valid integer indices.
     """
     if not text_input_indices_str or not text_input_indices_str.strip():
-        return [] # Return empty list if input is empty
+        logger.debug("handle_textbox_selection: no input string provided.")
+        return [] 
 
     valid_indices = []
     parts = text_input_indices_str.split(',')
@@ -336,15 +381,13 @@ def handle_textbox_selection(text_input_indices_str: str, current_news_data: lis
         try:
             index = int(part.strip())
             if 0 <= index < len(current_news_data):
-                if index not in valid_indices: # Avoid duplicates if user types "0,0,1"
+                if index not in valid_indices: 
                     valid_indices.append(index)
             else:
-                # Optionally, log or notify about invalid index range
-                print(f"Warning: Index {index} is out of range for current news data (size {len(current_news_data)}).")
+                logger.warning(f"Warning: Index {index} is out of range for current news data (size {len(current_news_data)}).")
         except ValueError:
-            # Optionally, log or notify about non-integer input
-            print(f"Warning: Non-integer value '{part}' found in selection input.")
-            # Depending on desired behavior, could return previous state or just skip invalid part
+            logger.warning(f"Warning: Non-integer value '{part}' found in selection input.")
+    logger.debug(f"handle_textbox_selection: parsed indices {valid_indices} from '{text_input_indices_str}'")
     return valid_indices
 
 
@@ -361,28 +404,29 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             gr.Markdown("## API Keys and Service Configuration")
             with gr.Row():
                 with gr.Column():
-                    cfg_gemini_key = gr.Textbox(label="Google Gemini API Key", type="password", lines=1)
-                    cfg_openrouter_key = gr.Textbox(label="OpenRouter API Key", type="password", lines=1)
-                    cfg_ollama_url = gr.Textbox(label="Ollama API Base URL", placeholder="e.g., http://localhost:11434", lines=1)
+                    cfg_gemini_key = gr.Textbox(label="Google Gemini API Key", type="password", lines=1, value=loaded_configs.get("gemini_key", ""))
+                    cfg_openrouter_key = gr.Textbox(label="OpenRouter API Key", type="password", lines=1, value=loaded_configs.get("openrouter_key", ""))
+                    cfg_ollama_url = gr.Textbox(label="Ollama API Base URL", placeholder="e.g., http://localhost:11434", lines=1, value=loaded_configs.get("ollama_url", ""))
                 with gr.Column():
-                    cfg_azure_tts_key = gr.Textbox(label="Azure TTS API Key", type="password", lines=1)
-                    cfg_azure_tts_region = gr.Textbox(label="Azure TTS Region", placeholder="e.g., eastus", lines=1)
+                    cfg_azure_tts_key = gr.Textbox(label="Azure TTS API Key", type="password", lines=1, value=loaded_configs.get("azure_tts_key", ""))
+                    cfg_azure_tts_region = gr.Textbox(label="Azure TTS Region", placeholder="e.g., eastus", lines=1, value=loaded_configs.get("azure_tts_region", ""))
             with gr.Row():
                 with gr.Column():
-                    cfg_google_tts_path = gr.Textbox(label="Google Cloud TTS Credentials Path (JSON file path)", lines=1)
+                    cfg_google_tts_path = gr.Textbox(label="Google Cloud TTS Credentials Path (JSON file path)", lines=1, value=loaded_configs.get("google_tts_path", ""))
                 with gr.Column():
-                    cfg_minimax_key = gr.Textbox(label="Minimax API Key (TTS)", type="password", lines=1)
-                    cfg_minimax_group_id = gr.Textbox(label="Minimax Group ID (TTS)", lines=1)
+                    cfg_minimax_key = gr.Textbox(label="Minimax API Key (TTS)", type="password", lines=1, value=loaded_configs.get("minimax_key", ""))
+                    cfg_minimax_group_id = gr.Textbox(label="Minimax Group ID (TTS)", lines=1, value=loaded_configs.get("minimax_group_id", ""))
             
-            # cfg_save_button = gr.Button("Save Configuration") # Not strictly needed if passing directly
-            # cfg_status_md = gr.Markdown("")
-            # cfg_save_button.click(
-            #     handle_save_configuration,
-            #     inputs=[cfg_gemini_key, cfg_openrouter_key, cfg_azure_tts_key, cfg_azure_tts_region,
-            #             cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id, cfg_ollama_url],
-            #     outputs=[cfg_status_md]
-            # )
-            gr.Markdown("Configuration is passed directly to generation. No explicit save needed for this version.")
+            cfg_save_button = gr.Button("Save Configuration")
+            cfg_status_md = gr.Markdown("")
+            cfg_save_button.click(
+                handle_save_configuration,
+                inputs=[cfg_gemini_key, cfg_openrouter_key, cfg_ollama_url, 
+                        cfg_azure_tts_key, cfg_azure_tts_region, cfg_google_tts_path,
+                        cfg_minimax_key, cfg_minimax_group_id],
+                outputs=[cfg_status_md]
+            )
+            gr.Markdown("Click 'Save Configuration' to store API keys and paths in `app_config.json` (local storage).")
 
 
         with gr.TabItem("News Fetching & Processing"):
