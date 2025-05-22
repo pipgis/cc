@@ -180,41 +180,87 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, voice_gender
         return {'success': False, 'error': "Minimax API Key and Group ID are required."}
 
     # This is a hypothetical structure. Replace with actual API endpoint and payload.
-    # MINIMAX_TTS_API_URL = "https://api.minimax.ai/v1/text_to_speech" # Example URL
+    # MINIMAX_TTS_API_URL = "https://api.minimax.ai/v1/text_to_speech" # Old Example URL
     
     logger.info(f"Attempting Minimax TTS for text: \"{text_to_speak[:30]}...\" to file: {output_filename}")
-    logger.info(f"Voice Gender: {voice_gender}, Voice ID: {minimax_voice_id}")
-    logger.warning("Note: Minimax TTS is currently a placeholder and will not produce audio.")
+    # Voice ID from parameter minimax_voice_id and voice_gender are ignored as per current requirement.
+    # Using "Boyan_new_platform" as default.
 
-    # Example payload structure (needs to be verified with Minimax docs)
-    # payload = {
-    #     "text": text_to_speak,
-    #     "voice_id": minimax_voice_id or ("male_voice_default" if voice_gender == 'male' else "female_voice_default"),
-    #     "output_format": "mp3"
-    # }
-    # headers = {
-    #     "Authorization": f"Bearer {minimax_api_key}",
-    #     "X-Group-ID": minimax_group_id, # Or however group ID is passed
-    #     "Content-Type": "application/json"
-    # }
-
-    # try:
-    #     response = requests.post(MINIMAX_TTS_API_URL, json=payload, headers=headers, timeout=30)
-    #     response.raise_for_status()
-    #     with open(output_filename, 'wb') as f:
-    #         f.write(response.content)
-    #     logger.info(f"Minimax TTS successfully generated audio to {output_filename}")
-    #     return {'success': True, 'error': None}
-    # except requests.exceptions.RequestException as e:
-    #     logger.error(f"Minimax API request failed for {output_filename}", exc_info=True)
-    #     return {'success': False, 'error': f"Minimax API request failed: {e}"}
-    # except Exception as e:
-    #     logger.error(f"Minimax TTS processing failed for {output_filename}", exc_info=True)
-    #     return {'success': False, 'error': f"Minimax TTS processing failed: {e}"}
+    url = f"https://api.minimax.chat/v1/t2a_v2?GroupId={minimax_group_id}"
+    headers = {
+        "Authorization": f"Bearer {minimax_api_key}",
+        "Content-Type": "application/json"
+    }
     
-    logger.error(f"Minimax TTS not yet implemented. Cannot generate {output_filename}.")
-    return {'success': False, 'error': 'Minimax TTS not yet implemented or API details needed.'}
+    payload = {
+        "model": "speech-02-hd",
+        "text": text_to_speak,
+        "timber_weights": [
+            {
+                "voice_id": "Boyan_new_platform", # Default voice as per instruction
+                "weight": 100
+            }
+        ],
+        "voice_setting": {
+            "voice_id": "", # As per example; timber_weights is primary
+            "speed": 1.0, 
+            "pitch": 0,
+            "vol": 1.0, 
+            "latex_read": False
+        },
+        "audio_setting": {
+            "sample_rate": 32000,
+            "bitrate": 128000,
+            "format": "mp3"
+        },
+        "language_boost": "auto"
+    }
 
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        
+        if response.status_code == 200:
+            # Check for error in JSON response as per Minimax documentation structure
+            # A successful audio response might not be JSON, but an error response usually is.
+            # If content type is audio/mpeg, it's likely success.
+            if 'audio/mpeg' in response.headers.get('Content-Type', '').lower():
+                with open(output_filename, 'wb') as f:
+                    f.write(response.content)
+                logger.info(f"Minimax TTS successfully generated audio to {output_filename}")
+                return {'success': True, 'error': None}
+            else:
+                # Try to parse as JSON for error details if not audio
+                try:
+                    error_data = response.json()
+                    if error_data.get("base_resp", {}).get("status_code") != 0:
+                        error_msg = error_data.get("base_resp", {}).get("status_msg", "Unknown Minimax API error structure")
+                        logger.error(f"Minimax API returned an error for {output_filename}. Status: {error_data['base_resp']['status_code']}, Message: {error_msg}, Details: {response.text}")
+                        return {'success': False, 'error': f"Minimax API Error (Code {error_data['base_resp']['status_code']}): {error_msg}"}
+                except json.JSONDecodeError:
+                    # If it's not audio and not valid JSON, it's an unexpected response
+                    logger.error(f"Minimax API request failed for {output_filename}. Status: {response.status_code}, Response is not audio and not valid JSON: {response.text[:200]}...") # Log first 200 chars
+                    return {'success': False, 'error': f"Minimax API Error (Status {response.status_code}): Unexpected response format. Response: {response.text[:200]}..."}
+                # If JSON was parsed but didn't match the error structure, log and return generic error
+                logger.error(f"Minimax API request returned status 200 but content was not audio and did not match expected error structure for {output_filename}. Response: {response.text[:200]}...")
+                return {'success': False, 'error': f"Minimax API Error (Status 200): Content not audio, unexpected JSON structure. Response: {response.text[:200]}..."}
+
+        else: # Non-200 status codes
+            error_text = response.text
+            try: # Attempt to parse JSON error from Minimax if available
+                error_json = response.json()
+                if "base_resp" in error_json and "status_msg" in error_json["base_resp"]:
+                    error_text = f"Code {error_json['base_resp'].get('status_code', response.status_code)}: {error_json['base_resp']['status_msg']}"
+            except json.JSONDecodeError:
+                pass # Stick with response.text if not JSON
+            logger.error(f"Minimax API request failed for {output_filename}. Status: {response.status_code}, Response: {error_text}")
+            return {'success': False, 'error': f"Minimax API Error (Status {response.status_code}): {error_text}"}
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Minimax API request failed for {output_filename} due to a network error or timeout.", exc_info=True)
+        return {'success': False, 'error': f"Minimax API request failed: {e}"}
+    except Exception as e: # Catch any other unexpected errors during processing
+        logger.error(f"An unexpected error occurred during Minimax TTS processing for {output_filename}.", exc_info=True)
+        return {'success': False, 'error': f"Minimax TTS processing failed: {e}"}
 
 # --- Main Dispatch Function ---
 
