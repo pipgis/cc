@@ -139,7 +139,7 @@ def handle_generate_audio_subtitles(
     generation_log = "Starting generation process...\n"
     output_links_markdown = ""
 
-    if selected_indices is None or not selected_indices['index']: # Check if selection event data is valid
+    if not selected_indices: # Check if selection event data is valid (now expects a list)
         generation_log += "No news items selected for generation.\n"
         return generation_log, ""
 
