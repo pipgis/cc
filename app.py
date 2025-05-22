@@ -2,6 +2,7 @@ import gradio as gr
 import os
 import json
 import logging
+from dotenv import load_dotenv
 from datetime import datetime
 import pandas as pd # For DataFrame
 from mutagen.mp3 import MP3 # For getting audio duration
@@ -26,6 +27,9 @@ CONFIG_FILE = "app_config.json"
 LOG_FILE = "app.log"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Load environment variables from .env file
+dotenv_loaded = load_dotenv()
+
 # --- Logging Configuration ---
 logger = logging.getLogger('NewsAppLogger')
 logger.setLevel(logging.INFO)
@@ -48,58 +52,27 @@ ch.setFormatter(formatter)
 logger.addHandler(fh)
 logger.addHandler(ch)
 
+if dotenv_loaded:
+    logger.info("Successfully loaded .env file.")
+else:
+    logger.info("No .env file found. Application will rely on OS environment variables or defaults.")
+
+# Log status of critical environment variables without logging their values
+env_vars_to_check = [
+    "GEMINI_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_API_BASE_URL",
+    "AZURE_TTS_API_KEY", "AZURE_TTS_REGION", 
+    "GOOGLE_CLOUD_TTS_CREDENTIALS_PATH",
+    "MINIMAX_API_KEY", "MINIMAX_GROUP_ID"
+]
+for var_name in env_vars_to_check:
+    if os.getenv(var_name):
+        logger.info(f"{var_name} found in environment.")
+    else:
+        logger.info(f"{var_name} not found in environment. Using default or manual input if applicable.")
+
 logger.info("Application starting. Logging configured.")
 
-# --- Configuration Helper Functions ---
-def save_config(config_data: dict, filename: str = CONFIG_FILE):
-    """Saves configuration data to a JSON file."""
-    try:
-        with open(filename, "w") as f:
-            json.dump(config_data, f, indent=4)
-        return True
-    except IOError:
-        return False
-
-def load_config(filename: str = CONFIG_FILE) -> dict:
-    """Loads configuration data from a JSON file."""
-    if not os.path.exists(filename):
-        return {}
-    try:
-        with open(filename, "r") as f:
-            return json.load(f)
-    except (IOError, json.JSONDecodeError):
-        return {}
-
-# Load initial configuration
-loaded_configs = load_config()
-
 # --- Handler Functions ---
-
-def handle_save_configuration(gemini_key, openrouter_key, ollama_url, 
-                              azure_key, azure_region, google_tts_path, 
-                              minimax_key, minimax_group_id):
-    """
-    Handles the "Save Configuration" button click.
-    Saves configuration to app_config.json.
-    """
-    config_data = {
-        "gemini_key": gemini_key,
-        "openrouter_key": openrouter_key,
-        "ollama_url": ollama_url,
-        "azure_tts_key": azure_key,
-        "azure_tts_region": azure_region,
-        "google_tts_path": google_tts_path,
-        "minimax_key": minimax_key,
-        "minimax_group_id": minimax_group_id,
-        # Add any other config values you want to save
-    }
-    if save_config(config_data):
-        logger.info("Configuration saved successfully to app_config.json.")
-        return "Configuration saved successfully to app_config.json."
-    else:
-        logger.error("Error: Could not save configuration.")
-        return "Error: Could not save configuration."
-
 
 def handle_fetch_news(urls_text_input):
     """
@@ -402,31 +375,23 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
     with gr.Tabs():
         with gr.TabItem("Configuration"):
             gr.Markdown("## API Keys and Service Configuration")
+            gr.Markdown("Values are loaded from `.env` file if present, or can be manually entered. Click 'Save Configuration' to persist current UI values to `app_config.json` (for review or backup, not primary loading).")
             with gr.Row():
                 with gr.Column():
-                    cfg_gemini_key = gr.Textbox(label="Google Gemini API Key", type="password", lines=1, value=loaded_configs.get("gemini_key", ""))
-                    cfg_openrouter_key = gr.Textbox(label="OpenRouter API Key", type="password", lines=1, value=loaded_configs.get("openrouter_key", ""))
-                    cfg_ollama_url = gr.Textbox(label="Ollama API Base URL", placeholder="e.g., http://localhost:11434", lines=1, value=loaded_configs.get("ollama_url", ""))
+                    cfg_gemini_key = gr.Textbox(label="Google Gemini API Key", type="password", lines=1, value=os.getenv("GEMINI_API_KEY", ""))
+                    cfg_openrouter_key = gr.Textbox(label="OpenRouter API Key", type="password", lines=1, value=os.getenv("OPENROUTER_API_KEY", ""))
+                    cfg_ollama_url = gr.Textbox(label="Ollama API Base URL", placeholder="e.g., http://localhost:11434", lines=1, value=os.getenv("OLLAMA_API_BASE_URL", "http://localhost:11434"))
                 with gr.Column():
-                    cfg_azure_tts_key = gr.Textbox(label="Azure TTS API Key", type="password", lines=1, value=loaded_configs.get("azure_tts_key", ""))
-                    cfg_azure_tts_region = gr.Textbox(label="Azure TTS Region", placeholder="e.g., eastus", lines=1, value=loaded_configs.get("azure_tts_region", ""))
+                    cfg_azure_tts_key = gr.Textbox(label="Azure TTS API Key", type="password", lines=1, value=os.getenv("AZURE_TTS_API_KEY", ""))
+                    cfg_azure_tts_region = gr.Textbox(label="Azure TTS Region", placeholder="e.g., eastus", lines=1, value=os.getenv("AZURE_TTS_REGION", ""))
             with gr.Row():
                 with gr.Column():
-                    cfg_google_tts_path = gr.Textbox(label="Google Cloud TTS Credentials Path (JSON file path)", lines=1, value=loaded_configs.get("google_tts_path", ""))
+                    cfg_google_tts_path = gr.Textbox(label="Google Cloud TTS Credentials Path (JSON file path)", lines=1, value=os.getenv("GOOGLE_CLOUD_TTS_CREDENTIALS_PATH", ""))
                 with gr.Column():
-                    cfg_minimax_key = gr.Textbox(label="Minimax API Key (TTS)", type="password", lines=1, value=loaded_configs.get("minimax_key", ""))
-                    cfg_minimax_group_id = gr.Textbox(label="Minimax Group ID (TTS)", lines=1, value=loaded_configs.get("minimax_group_id", ""))
+                    cfg_minimax_key = gr.Textbox(label="Minimax API Key (TTS)", type="password", lines=1, value=os.getenv("MINIMAX_API_KEY", ""))
+                    cfg_minimax_group_id = gr.Textbox(label="Minimax Group ID (TTS)", lines=1, value=os.getenv("MINIMAX_GROUP_ID", ""))
             
-            cfg_save_button = gr.Button("Save Configuration")
-            cfg_status_md = gr.Markdown("")
-            cfg_save_button.click(
-                handle_save_configuration,
-                inputs=[cfg_gemini_key, cfg_openrouter_key, cfg_ollama_url, 
-                        cfg_azure_tts_key, cfg_azure_tts_region, cfg_google_tts_path,
-                        cfg_minimax_key, cfg_minimax_group_id],
-                outputs=[cfg_status_md]
-            )
-            gr.Markdown("Click 'Save Configuration' to store API keys and paths in `app_config.json` (local storage).")
+            gr.Markdown("API keys and other configurations are primarily managed via the `.env` file or environment variables. Changes made here are for the current session only unless your environment variables are updated externally.")
 
 
         with gr.TabItem("News Fetching & Processing"):

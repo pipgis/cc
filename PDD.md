@@ -46,10 +46,12 @@
     *   Controls to initiate news fetching, summarization (if desired), audio generation, and subtitle creation.
     *   Download links for generated MP3, SRT, and LRC files.
 *   **Configuration Management:**
-    *   The application now saves user-defined configurations (API keys, service choices, paths) locally in a file named `app_config.json`.
-    *   This configuration is automatically loaded when the application starts, populating the fields in the 'Configuration' tab.
-    *   A "Save Configuration" button in the 'Configuration' tab allows users to persist their current settings.
-    *   To protect sensitive information, `app_config.json` is included in the project's `.gitignore` file and should not be version controlled.
+    *   Application settings, especially API keys and sensitive credentials, are managed via a `.env` file located in the project root.
+    *   Users should create a `.env` file by copying the provided `.env.example` template and then fill in their specific configuration values (e.g., API keys, service URLs).
+    *   The application uses the `python-dotenv` library to load these variables from the `.env` file into environment variables upon startup.
+    *   The input fields in the 'Configuration' tab of the UI will display the values loaded from these environment variables or pre-defined defaults if a variable is not set.
+    *   **Important:** Changes made to configuration values directly in the UI are for the current session only and are *not* saved back to any file. The `.env` file must be manually edited to persist configuration changes. The previous UI-based saving mechanism (to `app_config.json`) has been removed to encourage secure management of credentials.
+    *   The `.env` file itself is ignored by Git (via `.gitignore`) to protect sensitive user data.
 
 ## 4. Technical Specifications
 
@@ -61,7 +63,8 @@
     *   TTS APIs: `azure-cognitiveservices-speech`, `google-cloud-tts`, `requests` (for Minimax or other REST-based TTS). Consider `edge-tts` or `pyttsx3` as potential fallbacks or simpler options if direct API integration is complex or for local testing.
     *   Audio Processing: `pydub` (for MP3 handling if needed).
     *   GUI: `gradio`
-*   Data Handling: In-memory for processing, direct file downloads for outputs. Configuration data is persisted in `app_config.json`.
+    *   Environment Variable Management: `python-dotenv`
+*   Data Handling: In-memory for processing, direct file downloads for outputs. Configuration is managed via environment variables (loaded from `.env`).
 *   **Logging:**
     *   The application utilizes Python's built-in `logging` module for robust event tracking and diagnostics.
     *   Log messages are output to a file named `app.log` (configured with UTF-8 encoding) and simultaneously to the console.
@@ -79,7 +82,8 @@
         *   Google Cloud TTS Credentials Path (file path input or JSON text input)
         *   Minimax API Key (text input)
     *   Section for Ollama:
-        *   Ollama API Base URL (text input, e.g., http://localhost:11434)
+        *   Ollama API Base URL (text input, e.g., http://localhost:11434, value loaded from environment variable `OLLAMA_API_BASE_URL`).
+    *   Note: UI fields display current session values loaded from environment variables. Changes in the UI do not persist unless the `.env` file or system environment variables are updated.
 *   **Tab 2: News Fetching & Processing**
     *   Input area: Text box for multiple URLs/RSS feeds (one per line).
     *   Button: "Fetch News".
