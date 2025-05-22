@@ -252,11 +252,24 @@ def handle_generate_audio_subtitles(
         msg = f"  Generating audio with {tts_service} ({tts_voice_gender})..."
         logger.info(msg)
         log_messages.append(msg)
+        # Prepare API key arguments for tts_generator.generate_audio
+        azure_api_key_to_pass = None
+        if tts_service == "azure":
+            azure_api_key_to_pass = azure_tts_key_cfg
+        # For Minimax, its specific key and group ID are passed directly as named arguments.
+        # Other services either don't need a generic api_key or use specific path args.
+
         tts_result = tts_generator.generate_audio(
-            text_to_speak=text_for_tts, output_filename=mp3_filename, service=tts_service, voice_gender=tts_voice_gender,
-            api_key=(azure_tts_key_cfg if tts_service == "azure" else minimax_tts_key_cfg if tts_service == "minimax" else None),
-            azure_region=azure_tts_region_cfg, google_credentials_path=google_tts_path_cfg,
-            minimax_group_id=minimax_tts_group_id_cfg
+            text_to_speak=text_for_tts, 
+            output_filename=mp3_filename, 
+            service=tts_service, 
+            voice_gender=tts_voice_gender,
+            api_key=azure_api_key_to_pass,  # Generic API key, used by Azure
+            azure_region=azure_tts_region_cfg,
+            google_credentials_path=google_tts_path_cfg,
+            minimax_api_key=minimax_tts_key_cfg, # Specific key for Minimax
+            minimax_group_id=minimax_tts_group_id_cfg # Specific group ID for Minimax
+            # minimax_voice_id is not passed as it's not a UI input and handled by default in tts_generator
         )
 
         if tts_result['success']:

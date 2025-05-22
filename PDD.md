@@ -33,7 +33,11 @@
     *   Supported Services:
         *   Microsoft Azure Cognitive Services TTS API (requires user API key/credentials).
         *   Google Cloud Text-to-Speech API (requires user API key/credentials).
-        *   Minimax TTS API (specific API details to be confirmed, assumes user API key/credentials).
+        *   Minimax TTS API:
+            *   Requires user API key and Group ID (configured via `.env`).
+            *   Utilizes the `speech-02-hd` model for generation.
+            *   The default voice is "Boyan_new_platform". *Note: The UI's 'Select Voice Gender' option does not currently change the Minimax voice.*
+            *   Generates audio in MP3 format (32000 Hz sample rate, 128 kbps bitrate, as per current implementation defaults).
     *   Output filenames will follow the convention: `YYYYMMDDHHMMSS_Topic_News.extension` (e.g., `20231027103000_AI_News.mp3`). If no topic is specified, it will be `YYYYMMDDHHMMSS_News.extension`.
 *   **Subtitle Generation:**
     *   Formats: SRT (.srt) and LRC (.lrc).
