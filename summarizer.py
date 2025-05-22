@@ -259,4 +259,3 @@ if __name__ == '__main__':
     print("\nNote: For API services (Gemini, OpenRouter), ensure you have replaced placeholder API keys with your actual keys.")
     print("For Ollama, ensure the server is running, the specified model is downloaded, and the API URL is correct.")
     print("Summarization quality and speed will vary based on the model and service used.")
-```
