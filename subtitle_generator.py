@@ -197,4 +197,3 @@ if __name__ == '__main__':
         print("  SRT Content (short):")
         with open(srt_short_output_file, 'r', encoding='utf-8') as f:
             print(f.read())
-```
