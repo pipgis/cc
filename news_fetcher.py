@@ -1,8 +1,11 @@
 import requests
 from bs4 import BeautifulSoup
 import feedparser
+import logging
 from datetime import datetime
 import re
+
+logger = logging.getLogger(__name__)
 
 def fetch_url_content(url: str) -> dict:
     """
@@ -15,6 +18,7 @@ def fetch_url_content(url: str) -> dict:
         response = requests.get(url, timeout=10, headers=headers)
         response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
     except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed for URL: {url}", exc_info=True)
         return {'error': f"Request failed: {e}", 'source_url': url}
 
     soup = BeautifulSoup(response.content, 'html.parser')
@@ -50,8 +54,8 @@ def fetch_url_content(url: str) -> dict:
         try:
             # Content is usually in ISO format e.g., "2023-10-27T10:30:00Z"
             published_date_iso = datetime.fromisoformat(meta_pub_time.get('content').replace('Z', '+00:00')).isoformat()
-        except ValueError:
-            # Placeholder for more sophisticated date parsing from text or other tags
+        except ValueError as ve:
+            logger.debug(f"Could not parse date from meta tag for {url}: {meta_pub_time.get('content')}", exc_info=True)
             pass
     # Add more date extraction logic here (e.g., time tags, specific class names)
 
@@ -63,8 +67,10 @@ def fetch_url_content(url: str) -> dict:
 
 
     if not title and not summary: # If we couldn't find a title or summary, it's likely not a useful article page
+        logger.warning(f"Could not extract meaningful content (title/summary missing) for URL: {url}")
         return {'error': 'Could not extract meaningful content (title/summary missing)', 'source_url': url}
 
+    logger.info(f"Successfully fetched and parsed content from URL: {url}")
     return {
         'title': title,
         'summary': summary,
@@ -80,18 +86,19 @@ def fetch_rss_feed(feed_url: str) -> list:
     try:
         parsed_feed = feedparser.parse(feed_url)
     except Exception as e: # feedparser can raise various errors
-        # Placeholder for more specific error handling
+        logger.error(f"Failed to parse RSS feed: {feed_url}", exc_info=True)
         return [{'error': f"Failed to parse RSS feed: {e}", 'source_url': feed_url}]
 
     if parsed_feed.bozo:
-        # Bozo bit is set if the feed is not well-formed.
-        # We can still try to process entries, but log a warning.
-        # For now, let's treat it as an error if entries are missing.
+        bozo_exception_message = str(parsed_feed.bozo_exception)
+        logger.warning(f"RSS feed '{feed_url}' may be ill-formed. Bozo exception: {bozo_exception_message}")
         if not parsed_feed.entries:
-             return [{'error': f"RSS feed is not well-formed and no entries found: {parsed_feed.bozo_exception}", 'source_url': feed_url}]
+            logger.error(f"RSS feed '{feed_url}' is not well-formed and no entries found. Bozo exception: {bozo_exception_message}")
+            return [{'error': f"RSS feed is not well-formed and no entries found: {bozo_exception_message}", 'source_url': feed_url}]
 
     news_items = []
-    for entry in parsed_feed.entries:
+    logger.info(f"Processing {len(parsed_feed.entries)} entries from RSS feed: {feed_url}")
+    for entry_index, entry in enumerate(parsed_feed.entries):
         title = entry.get('title')
         link = entry.get('link')
         summary = entry.get('summary') or entry.get('description') # RSS feeds can use either
@@ -102,6 +109,7 @@ def fetch_rss_feed(feed_url: str) -> list:
             try:
                 published_date_iso = datetime(*published_time_struct[:6]).isoformat()
             except TypeError: # If published_time_struct is None or not a valid time tuple
+                logger.debug(f"Invalid date format in RSS entry {entry_index} for feed {feed_url}.", exc_info=True)
                 pass # Keep published_date_iso as None
 
         # Basic cleaning
@@ -129,37 +137,42 @@ def fetch_news(sources: list[str]) -> list[dict]:
     """
     all_news_items = []
     processed_urls = set()
+    logger.info(f"Starting news fetching process for {len(sources)} sources.")
 
     for source in sources:
         # Simple heuristic for RSS: ends with .xml, .rss, or contains "feed" or "rss" in path
         # More robust detection might involve trying to parse as feed and falling back.
-        if source.endswith(('.xml', '.rss')) or "feed" in source or "rss" in source.lower():
-            print(f"Fetching RSS feed: {source}")
+        if source.endswith(('.xml', '.rss')) or "feed" in source.lower() or "rss" in source.lower():
+            logger.info(f"Fetching RSS feed: {source}")
             rss_items = fetch_rss_feed(source)
             for item in rss_items:
                 if item.get('error'):
-                    print(f"Error processing RSS item from {source}: {item['error']}")
+                    logger.warning(f"Error processing RSS item from {source}: {item['error']}")
                     all_news_items.append(item) # Keep error items for now, could filter later
                 elif item.get('source_url') and item['source_url'] not in processed_urls:
                     all_news_items.append(item)
                     processed_urls.add(item['source_url'])
                 elif item.get('title') and item.get('title') not in processed_urls: # Fallback to title if URL is missing or duplicated
+                    logger.debug(f"Adding RSS item by title (URL missing or duplicate): {item.get('title')}")
                     all_news_items.append(item)
                     processed_urls.add(item['title'])
+                else:
+                    logger.debug(f"Skipping duplicate or invalid RSS item: {item.get('title') or item.get('source_url')}")
+
 
         else:
-            print(f"Fetching URL content: {source}")
+            logger.info(f"Fetching URL content: {source}")
             if source not in processed_urls:
                 item = fetch_url_content(source)
                 if item.get('error'):
-                     print(f"Error processing URL {source}: {item['error']}")
+                     logger.warning(f"Error processing URL {source}: {item['error']}")
                 all_news_items.append(item) # Add item even if there's an error to see what went wrong
                 if item.get('source_url'): # Should always be there
                     processed_urls.add(item['source_url'])
             else:
-                print(f"Skipping already processed URL: {source}")
+                logger.info(f"Skipping already processed URL: {source}")
 
-
+    logger.info(f"Collected {len(all_news_items)} items before deduplication.")
     # Deduplication (a more robust one after collection)
     # First pass was to avoid re-fetching. This pass is to ensure uniqueness in the final list.
     unique_items_dict = {}
@@ -187,50 +200,54 @@ def fetch_news(sources: list[str]) -> list[dict]:
 
 
     final_news_list.extend(list(unique_items_dict.values()))
+    logger.info(f"Returning {len(final_news_list)} unique news items after deduplication.")
     return final_news_list
 
 if __name__ == '__main__':
+    # Basic setup for testing this module directly
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
     sample_sources = [
         "http://rss.cnn.com/rss/cnn_topstories.rss",
         "https://www.bbc.com/news", # General news site, likely hard to parse well with current simple logic
         "https://feeds.arstechnica.com/arstechnica/index", # Another RSS
         # "https://www.theverge.com/" # Example of a site that might be harder
         # Add a non-existent URL or a URL that might cause timeout for error testing
-        # "http://thisdomainprobablydoesnotexist12345.com",
-        # "https://httpstat.us/503" # Service unavailable
+        "http://thisdomainprobablydoesnotexist12345.com",
+        "https://httpstat.us/503" # Service unavailable
     ]
 
-    print("Fetching news from sample sources...")
+    logger.info("Fetching news from sample sources for direct module test...")
     news_items = fetch_news(sample_sources)
-    print(f"\nFetched {len(news_items)} items (including potential errors):")
+    logger.info(f"\nFetched {len(news_items)} items (including potential errors):")
     for i, item in enumerate(news_items):
-        print(f"\n--- Item {i+1} ---")
-        print(f"  Title: {item.get('title')}")
-        print(f"  Source: {item.get('source_url')}")
-        print(f"  Published: {item.get('published_date')}")
-        print(f"  Summary: {item.get('summary', 'N/A')[:100]}...") # Print first 100 chars of summary
+        logger.info(f"\n--- Item {i+1} ---")
+        logger.info(f"  Title: {item.get('title')}")
+        logger.info(f"  Source: {item.get('source_url')}")
+        logger.info(f"  Published: {item.get('published_date')}")
+        logger.info(f"  Summary: {item.get('summary', 'N/A')[:100]}...") # Print first 100 chars of summary
         if item.get('error'):
-            print(f"  Error: {item.get('error')}")
+            logger.error(f"  Error: {item.get('error')}")
 
     # Example of fetching a single URL directly (for testing fetch_url_content)
-    # print("\n--- Testing single URL fetch ---")
-    # single_url_item = fetch_url_content("https://www.reuters.com/world/middle-east/israeli-tanks-push-deeper-rafah-residents-say-2024-05-29/")
-    # print(f"  Title: {single_url_item.get('title')}")
-    # print(f"  Source: {single_url_item.get('source_url')}")
-    # print(f"  Published: {single_url_item.get('published_date')}")
-    # print(f"  Summary: {single_url_item.get('summary', 'N/A')[:100]}...")
-    # if single_url_item.get('error'):
-    #     print(f"  Error: {single_url_item.get('error')}")
+    logger.info("\n--- Testing single URL fetch ---")
+    single_url_item = fetch_url_content("https://www.reuters.com/world/middle-east/israeli-tanks-push-deeper-rafah-residents-say-2024-05-29/")
+    logger.info(f"  Title: {single_url_item.get('title')}")
+    logger.info(f"  Source: {single_url_item.get('source_url')}")
+    logger.info(f"  Published: {single_url_item.get('published_date')}")
+    logger.info(f"  Summary: {single_url_item.get('summary', 'N/A')[:100]}...")
+    if single_url_item.get('error'):
+        logger.error(f"  Error: {single_url_item.get('error')}")
 
     # Example of fetching a single RSS feed directly
-    # print("\n--- Testing single RSS fetch ---")
-    # single_rss_items = fetch_rss_feed("http://rss.cnn.com/rss/cnn_topstories.rss")
-    # print(f"Fetched {len(single_rss_items)} items from single RSS:")
-    # for i, item in enumerate(single_rss_items[:2]): # Print first 2 items
-    #     print(f"  --- RSS Item {i+1} ---")
-    #     print(f"    Title: {item.get('title')}")
-    #     print(f"    Source: {item.get('source_url')}")
-    #     print(f"    Published: {item.get('published_date')}")
-    #     print(f"    Summary: {item.get('summary', 'N/A')[:100]}...")
-    #     if item.get('error'):
-    #         print(f"    Error: {item.get('error')}")
+    logger.info("\n--- Testing single RSS fetch ---")
+    single_rss_items = fetch_rss_feed("http://rss.cnn.com/rss/cnn_topstories.rss")
+    logger.info(f"Fetched {len(single_rss_items)} items from single RSS:")
+    for i, item in enumerate(single_rss_items[:2]): # Print first 2 items
+        logger.info(f"  --- RSS Item {i+1} ---")
+        logger.info(f"    Title: {item.get('title')}")
+        logger.info(f"    Source: {item.get('source_url')}")
+        logger.info(f"    Published: {item.get('published_date')}")
+        logger.info(f"    Summary: {item.get('summary', 'N/A')[:100]}...")
+        if item.get('error'):
+            logger.error(f"    Error: {item.get('error')}")

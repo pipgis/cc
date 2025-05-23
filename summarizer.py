@@ -1,6 +1,9 @@
 import requests
 import json
+import logging
 # import os # Potentially for API keys from env vars later
+
+logger = logging.getLogger(__name__)
 
 # --- Helper Functions for Each Service ---
 
@@ -29,38 +32,79 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
     # Try /api/chat first
     chat_api_url = f"{ollama_api_url.rstrip('/')}/api/chat"
     generate_api_url = f"{ollama_api_url.rstrip('/')}/api/generate" # Fallback
+    logger.debug(f"Attempting Ollama summarization with model '{ollama_model}' via /api/chat at {chat_api_url}")
 
     try:
         response = requests.post(chat_api_url, json=payload, timeout=60) # Increased timeout
         response.raise_for_status()
         response_data = response.json()
+        closing_think_tag = "</think>"
+
         if 'message' in response_data and 'content' in response_data['message']:
-            return {'summary': response_data['message']['content'].strip(), 'error': None}
-        # Fallback for older Ollama versions or if /api/chat response is unexpected
-        elif 'response' in response_data: # This is typical for /api/generate
-             return {'summary': response_data['response'].strip(), 'error': None}
+            raw_summary = response_data['message']['content']
+            think_tag_index = raw_summary.find(closing_think_tag)
+            
+            if think_tag_index != -1:
+                logger.debug("Found and removed <think> block from Ollama /api/chat response.")
+                processed_summary = raw_summary[think_tag_index + len(closing_think_tag):]
+            else:
+                processed_summary = raw_summary
+            
+            summary = processed_summary.strip()
+            logger.info(f"Ollama /api/chat summarization successful for model '{ollama_model}'.")
+            return {'summary': summary, 'error': None}
+
+        elif 'response' in response_data: # This is typical for /api/generate, but sometimes /api/chat might return this
+            raw_summary = response_data['response']
+            think_tag_index = raw_summary.find(closing_think_tag)
+
+            if think_tag_index != -1:
+                logger.debug("Found and removed <think> block from Ollama /api/chat (generate-like) response.")
+                processed_summary = raw_summary[think_tag_index + len(closing_think_tag):]
+            else:
+                processed_summary = raw_summary
+            
+            summary = processed_summary.strip()
+            logger.info(f"Ollama /api/chat (unexpectedly) returned /api/generate-like response for model '{ollama_model}'. Processed summary.")
+            return {'summary': summary, 'error': None}
         else:
+            logger.error(f"Unexpected response structure from Ollama /api/chat for model '{ollama_model}': {response_data}")
             return {'summary': None, 'error': f"Unexpected response structure from Ollama /api/chat: {response_data}"}
 
     except requests.exceptions.RequestException as e_chat:
-        # If /api/chat fails, try /api/generate as a fallback
-        # print(f"Ollama /api/chat failed: {e_chat}. Trying /api/generate...")
+        logger.warning(f"Ollama /api/chat failed for model '{ollama_model}': {e_chat}. Trying /api/generate...", exc_info=True)
         payload_generate = {
             "model": ollama_model,
             "prompt": prompt, # /api/generate uses "prompt"
             "stream": False
         }
+        logger.debug(f"Attempting Ollama /api/generate for model '{ollama_model}' at {generate_api_url}")
         try:
             response = requests.post(generate_api_url, json=payload_generate, timeout=60)
             response.raise_for_status()
             response_data = response.json()
             if 'response' in response_data:
-                return {'summary': response_data['response'].strip(), 'error': None}
+                raw_summary = response_data['response']
+                closing_think_tag = "</think>" # Defined again for clarity in this block
+                think_tag_index = raw_summary.find(closing_think_tag)
+
+                if think_tag_index != -1:
+                    logger.debug("Found and removed <think> block from Ollama /api/generate response.")
+                    processed_summary = raw_summary[think_tag_index + len(closing_think_tag):]
+                else:
+                    processed_summary = raw_summary
+                
+                summary = processed_summary.strip()
+                logger.info(f"Ollama /api/generate summarization successful for model '{ollama_model}'.")
+                return {'summary': summary, 'error': None}
             else:
-                 return {'summary': None, 'error': f"Unexpected response structure from Ollama /api/generate: {response_data}"}
+                logger.error(f"Unexpected response structure from Ollama /api/generate for model '{ollama_model}': {response_data}")
+                return {'summary': None, 'error': f"Unexpected response structure from Ollama /api/generate: {response_data}"}
         except requests.exceptions.RequestException as e_generate:
+            logger.error(f"Ollama API request failed for both /api/chat and /api/generate for model '{ollama_model}'. Chat error: {e_chat}. Generate error: {e_generate}", exc_info=True)
             return {'summary': None, 'error': f"Ollama API request failed for both /api/chat and /api/generate. Chat error: {e_chat}. Generate error: {e_generate}"}
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e_json:
+        logger.error(f"Failed to decode Ollama API response as JSON from {chat_api_url if 'e_chat' in locals() else generate_api_url}.", exc_info=True)
         return {'summary': None, 'error': "Failed to decode Ollama API response as JSON."}
 
 
@@ -85,6 +129,7 @@ def _summarize_gemini(text_to_summarize: str, api_key: str) -> dict:
     }
     headers = {'Content-Type': 'application/json'}
 
+    logger.debug(f"Attempting Gemini summarization with model gemini-1.5-flash-latest.")
     try:
         response = requests.post(api_url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
@@ -95,16 +140,20 @@ def _summarize_gemini(text_to_summarize: str, api_key: str) -> dict:
                 response_data['candidates'][0]['content'].get('parts') and
                 response_data['candidates'][0]['content']['parts'][0].get('text')):
             summary = response_data['candidates'][0]['content']['parts'][0]['text'].strip()
+            logger.info("Gemini summarization successful.")
             return {'summary': summary, 'error': None}
         else:
             error_detail = response_data.get('error', {}).get('message', 'Unknown structure')
             if 'promptFeedback' in response_data: # Check for safety blocks
                  error_detail = f"Content blocked by API. Feedback: {response_data['promptFeedback']}"
+            logger.error(f"Failed to extract summary from Gemini response. Detail: {error_detail}. Response: {response_data}")
             return {'summary': None, 'error': f"Failed to extract summary from Gemini response. Detail: {error_detail}. Response: {response_data}"}
 
     except requests.exceptions.RequestException as e:
+        logger.error(f"Gemini API request failed.", exc_info=True)
         return {'summary': None, 'error': f"Gemini API request failed: {e}"}
     except json.JSONDecodeError:
+        logger.error(f"Failed to decode Gemini API response as JSON.", exc_info=True)
         return {'summary': None, 'error': "Failed to decode Gemini API response as JSON."}
 
 
@@ -130,6 +179,7 @@ def _summarize_openrouter(text_to_summarize: str, api_key: str, model: str = "mi
         "max_tokens": 250
     }
 
+    logger.debug(f"Attempting OpenRouter summarization with model {model}.")
     try:
         response = requests.post(api_url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
@@ -139,16 +189,25 @@ def _summarize_openrouter(text_to_summarize: str, api_key: str, model: str = "mi
                 response_data['choices'][0].get('message') and
                 response_data['choices'][0]['message'].get('content')):
             summary = response_data['choices'][0]['message']['content'].strip()
+            logger.info(f"OpenRouter summarization successful with model {model}.")
             return {'summary': summary, 'error': None}
         else:
+            logger.error(f"Failed to extract summary from OpenRouter response with model {model}. Response: {response_data}")
             return {'summary': None, 'error': f"Failed to extract summary from OpenRouter response. Response: {response_data}"}
 
     except requests.exceptions.RequestException as e:
-        error_message = f"OpenRouter API request failed: {e}"
-        if response and response.text:
-            error_message += f" - Response: {response.text}"
+        error_message = f"OpenRouter API request failed for model {model}: {e}"
+        # Check if response is available and has text, as it might not exist in all RequestException scenarios
+        current_response_text = None
+        if 'response' in locals() and response is not None and hasattr(response, 'text'):
+            current_response_text = response.text
+        
+        if current_response_text:
+            error_message += f" - Response: {current_response_text}"
+        logger.error(error_message, exc_info=True)
         return {'summary': None, 'error': error_message}
     except json.JSONDecodeError:
+        logger.error(f"Failed to decode OpenRouter API response as JSON for model {model}.", exc_info=True)
         return {'summary': None, 'error': "Failed to decode OpenRouter API response as JSON."}
 
 
@@ -161,8 +220,10 @@ def summarize_text(text_to_summarize: str, service: str, api_key: str = None,
     Summarizes text using the specified service.
     """
     if not text_to_summarize or not text_to_summarize.strip():
+        logger.warning("Summarize_text called with empty or whitespace input.")
         return {'summary': None, 'error': "Input text is empty or whitespace."}
 
+    logger.info(f"Summarizing text using service: {service}")
     if service == "ollama":
         return _summarize_ollama(text_to_summarize, ollama_model, ollama_api_url)
     elif service == "gemini":
@@ -170,11 +231,15 @@ def summarize_text(text_to_summarize: str, service: str, api_key: str = None,
     elif service == "openrouter":
         return _summarize_openrouter(text_to_summarize, api_key, model=openrouter_model)
     else:
+        logger.error(f"Unsupported summarization service requested: {service}")
         return {'summary': None, 'error': f"Unsupported summarization service: {service}"}
 
 
 # --- Test Block ---
 if __name__ == '__main__':
+    # Basic setup for testing this module directly
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     sample_text = (
         "Artificial intelligence (AI) is rapidly transforming various industries, from healthcare to finance. "
         "Machine learning algorithms are becoming increasingly sophisticated, enabling predictive analytics and automation. "
@@ -184,23 +249,20 @@ if __name__ == '__main__':
         "This text is intentionally made a bit longer to provide enough content for summarization algorithms to process effectively, "
         "leading to a more meaningful and representative summary of the input."
     )
-    print(f"Original Text ({len(sample_text.split())} words):\n{sample_text}\n")
+    logger.info(f"Original Text ({len(sample_text.split())} words):\n{sample_text}\n")
 
     # Test Ollama (assuming Ollama is running and 'llama3' model is available)
-    # Set your Ollama URL if it's not the default.
-    # Ensure you have pulled the model: `ollama pull llama3`
-    print("--- Testing Ollama ---")
+    logger.info("--- Testing Ollama ---")
     ollama_api_url_test = "http://localhost:11434" # Default, change if yours is different
     ollama_model_test = "llama3" # Change if you use a different model
     
-    # Check if Ollama server is reachable (basic check)
     ollama_reachable = False
     try:
-        requests.get(f"{ollama_api_url_test}/api/tags", timeout=5) # /api/tags is a lightweight endpoint
+        requests.get(f"{ollama_api_url_test}/api/tags", timeout=5) 
         ollama_reachable = True
-        print(f"Ollama server detected at {ollama_api_url_test}. Attempting summarization...")
+        logger.info(f"Ollama server detected at {ollama_api_url_test}. Attempting summarization...")
     except requests.exceptions.ConnectionError:
-        print(f"Ollama server not reachable at {ollama_api_url_test}. Skipping Ollama test.")
+        logger.warning(f"Ollama server not reachable at {ollama_api_url_test}. Skipping Ollama test.")
     
     if ollama_reachable:
         ollama_summary_result = summarize_text(
@@ -210,40 +272,34 @@ if __name__ == '__main__':
             ollama_api_url=ollama_api_url_test
         )
         if ollama_summary_result['error']:
-            print(f"Ollama Error: {ollama_summary_result['error']}")
+            logger.error(f"Ollama Error: {ollama_summary_result['error']}")
         else:
-            print(f"Ollama Summary ({len(ollama_summary_result['summary'].split())} words): {ollama_summary_result['summary']}")
-    print("-" * 25)
+            logger.info(f"Ollama Summary ({len(ollama_summary_result['summary'].split())} words): {ollama_summary_result['summary']}")
+    logger.info("-" * 25)
 
     # Test Gemini (requires a valid API key)
-    # IMPORTANT: Replace "YOUR_GEMINI_API_KEY" with your actual key to test.
-    # You can also set it as an environment variable: os.environ.get("GEMINI_API_KEY")
-    print("\n--- Testing Google Gemini ---")
+    logger.info("\n--- Testing Google Gemini ---")
     gemini_api_key = "YOUR_GEMINI_API_KEY" # Replace with your key
     if gemini_api_key == "YOUR_GEMINI_API_KEY" or not gemini_api_key:
-        print("Gemini API key not set. Skipping Gemini test. (Replace 'YOUR_GEMINI_API_KEY' in the script to test)")
+        logger.warning("Gemini API key not set. Skipping Gemini test. (Replace 'YOUR_GEMINI_API_KEY' in the script to test)")
     else:
-        print("Attempting Gemini summarization...")
+        logger.info("Attempting Gemini summarization...")
         gemini_summary_result = summarize_text(sample_text, "gemini", api_key=gemini_api_key)
         if gemini_summary_result['error']:
-            print(f"Gemini Error: {gemini_summary_result['error']}")
+            logger.error(f"Gemini Error: {gemini_summary_result['error']}")
         else:
-            print(f"Gemini Summary ({len(gemini_summary_result['summary'].split())} words): {gemini_summary_result['summary']}")
-    print("-" * 25)
+            logger.info(f"Gemini Summary ({len(gemini_summary_result['summary'].split())} words): {gemini_summary_result['summary']}")
+    logger.info("-" * 25)
 
     # Test OpenRouter (requires a valid API key)
-    # IMPORTANT: Replace "YOUR_OPENROUTER_API_KEY" with your actual key to test.
-    # You can also set it as an environment variable: os.environ.get("OPENROUTER_API_KEY")
-    print("\n--- Testing OpenRouter ---")
+    logger.info("\n--- Testing OpenRouter ---")
     openrouter_api_key = "YOUR_OPENROUTER_API_KEY" # Replace with your key
-    # Example of using a different model, e.g., a smaller, faster one if available and suitable
-    # openrouter_model_test = "google/gemma-7b-it" 
-    openrouter_model_test = "mistralai/mistral-7b-instruct-v0.2" # Default from function
+    openrouter_model_test = "mistralai/mistral-7b-instruct-v0.2" 
 
     if openrouter_api_key == "YOUR_OPENROUTER_API_KEY" or not openrouter_api_key:
-        print("OpenRouter API key not set. Skipping OpenRouter test. (Replace 'YOUR_OPENROUTER_API_KEY' in the script to test)")
+        logger.warning("OpenRouter API key not set. Skipping OpenRouter test. (Replace 'YOUR_OPENROUTER_API_KEY' in the script to test)")
     else:
-        print(f"Attempting OpenRouter summarization with model {openrouter_model_test}...")
+        logger.info(f"Attempting OpenRouter summarization with model {openrouter_model_test}...")
         openrouter_summary_result = summarize_text(
             sample_text, 
             "openrouter", 
@@ -251,11 +307,11 @@ if __name__ == '__main__':
             openrouter_model=openrouter_model_test 
         )
         if openrouter_summary_result['error']:
-            print(f"OpenRouter Error: {openrouter_summary_result['error']}")
+            logger.error(f"OpenRouter Error: {openrouter_summary_result['error']}")
         else:
-            print(f"OpenRouter Summary ({len(openrouter_summary_result['summary'].split())} words): {openrouter_summary_result['summary']}")
-    print("-" * 25)
+            logger.info(f"OpenRouter Summary ({len(openrouter_summary_result['summary'].split())} words): {openrouter_summary_result['summary']}")
+    logger.info("-" * 25)
 
-    print("\nNote: For API services (Gemini, OpenRouter), ensure you have replaced placeholder API keys with your actual keys.")
-    print("For Ollama, ensure the server is running, the specified model is downloaded, and the API URL is correct.")
-    print("Summarization quality and speed will vary based on the model and service used.")
+    logger.info("\nNote: For API services (Gemini, OpenRouter), ensure you have replaced placeholder API keys with your actual keys.")
+    logger.info("For Ollama, ensure the server is running, the specified model is downloaded, and the API URL is correct.")
+    logger.info("Summarization quality and speed will vary based on the model and service used.")

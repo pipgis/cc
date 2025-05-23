@@ -1,6 +1,9 @@
 import os
 from datetime import timedelta
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 def format_srt_time(seconds_float: float) -> str:
     """
@@ -33,17 +36,22 @@ def generate_srt(text_content: str, audio_duration_seconds: float, output_filena
     Generates an SRT subtitle file.
     """
     if not text_content or not text_content.strip():
+        logger.error("SRT generation error: Input text is empty.")
         return {'success': False, 'error': "Input text is empty."}
     if audio_duration_seconds <= 0:
+        logger.error("SRT generation error: Audio duration must be positive.")
         return {'success': False, 'error': "Audio duration must be positive."}
     
+    logger.info(f"Generating SRT file for '{output_filename}' with audio duration {audio_duration_seconds}s.")
     try:
         output_dir = os.path.dirname(output_filename)
         if output_dir and not os.path.exists(output_dir):
+            logger.info(f"Creating directory for SRT file: {output_dir}")
             os.makedirs(output_dir, exist_ok=True)
 
         lines = [line.strip() for line in text_content.strip().split('\n') if line.strip()]
         if not lines:
+            logger.warning("SRT generation: No valid lines in text content after stripping.")
             return {'success': False, 'error': "No valid lines in text content after stripping."}
 
         with open(output_filename, 'w', encoding='utf-8') as f:
@@ -52,20 +60,18 @@ def generate_srt(text_content: str, audio_duration_seconds: float, output_filena
             
             for i in range(0, len(lines), lines_per_segment):
                 if current_time_seconds >= audio_duration_seconds:
-                    break # Stop if we've exceeded audio duration
+                    logger.info("SRT generation: Reached end of audio duration.")
+                    break 
 
                 segment_lines = lines[i : i + lines_per_segment]
                 segment_text = "\n".join(segment_lines)
 
                 start_time_str = format_srt_time(current_time_seconds)
                 
-                # Calculate end time based on segment_duration_seconds
-                # Ensure it doesn't exceed audio_duration_seconds
                 end_time_seconds = min(current_time_seconds + segment_duration_seconds, audio_duration_seconds)
                 
-                # If the calculated end_time makes the segment duration too short (e.g. < 0.1s), adjust or skip
                 if (end_time_seconds - current_time_seconds) < 0.1 and segment_index > 1:
-                    # Optionally merge with previous or simply stop if too short
+                    logger.debug(f"SRT segment {segment_index} too short, stopping generation.")
                     break
 
                 end_time_str = format_srt_time(end_time_seconds)
@@ -75,16 +81,18 @@ def generate_srt(text_content: str, audio_duration_seconds: float, output_filena
                 f.write(f"{segment_text}\n\n")
 
                 segment_index += 1
-                current_time_seconds = end_time_seconds # Move to the next segment's start time
+                current_time_seconds = end_time_seconds 
 
-                # Add a small buffer if not the last segment and if it won't exceed total duration
                 if current_time_seconds < audio_duration_seconds:
-                    current_time_seconds += 0.001 # Small gap to prevent overlap if times are exact
-
+                    current_time_seconds += 0.001 
+            
+            logger.info(f"SRT file generated successfully: {output_filename} with {segment_index-1} segments.")
         return {'success': True, 'error': None}
     except IOError as e:
+        logger.error(f"File I/O error during SRT generation for {output_filename}: {e}", exc_info=True)
         return {'success': False, 'error': f"File I/O error: {e}"}
     except Exception as e:
+        logger.error(f"An unexpected error occurred during SRT generation for {output_filename}: {e}", exc_info=True)
         return {'success': False, 'error': f"An unexpected error occurred: {e}"}
 
 
@@ -94,106 +102,113 @@ def generate_lrc(text_content: str, audio_duration_seconds: float, output_filena
     Lines are distributed evenly across the audio duration.
     """
     if not text_content or not text_content.strip():
+        logger.error("LRC generation error: Input text is empty.")
         return {'success': False, 'error': "Input text is empty."}
     if audio_duration_seconds <= 0:
+        logger.error("LRC generation error: Audio duration must be positive.")
         return {'success': False, 'error': "Audio duration must be positive."}
 
+    logger.info(f"Generating LRC file for '{output_filename}' with audio duration {audio_duration_seconds}s.")
     try:
         output_dir = os.path.dirname(output_filename)
         if output_dir and not os.path.exists(output_dir):
+            logger.info(f"Creating directory for LRC file: {output_dir}")
             os.makedirs(output_dir, exist_ok=True)
 
         lines = [line.strip() for line in text_content.strip().split('\n') if line.strip()]
         if not lines:
+            logger.warning("LRC generation: No valid lines in text content after stripping.")
             return {'success': False, 'error': "No valid lines in text content after stripping."}
 
         num_lines = len(lines)
-        if num_lines == 0:
+        if num_lines == 0: # Should be caught by `if not lines` already, but as a safeguard.
+            logger.warning("LRC generation: No lines to process.")
             return {'success': False, 'error': "No lines to process for LRC."}
             
         time_per_line = audio_duration_seconds / num_lines
+        logger.debug(f"LRC generation: {num_lines} lines, {time_per_line:.3f}s per line.")
 
         with open(output_filename, 'w', encoding='utf-8') as f:
             current_time_seconds = 0.0
-            for line_text in lines:
+            for line_index, line_text in enumerate(lines):
                 lrc_time_str = format_lrc_time(current_time_seconds)
                 f.write(f"{lrc_time_str}{line_text}\n")
                 current_time_seconds += time_per_line
-                # Ensure we don't slightly exceed total duration due to float arithmetic for the last line
-                if current_time_seconds > audio_duration_seconds:
-                    current_time_seconds = audio_duration_seconds
+                if line_index == num_lines -1 : # If it's the last line
+                     # Ensure the last timestamp doesn't exceed audio_duration by a tiny fraction
+                     # or is exactly at the start of the last segment if that's preferred.
+                     # For LRC, each line has its own timestamp, so this adjustment is mainly for theoretical precision.
+                     current_time_seconds = min(current_time_seconds, audio_duration_seconds)
 
 
+        logger.info(f"LRC file generated successfully: {output_filename}")
         return {'success': True, 'error': None}
     except IOError as e:
+        logger.error(f"File I/O error during LRC generation for {output_filename}: {e}", exc_info=True)
         return {'success': False, 'error': f"File I/O error: {e}"}
     except Exception as e:
+        logger.error(f"An unexpected error occurred during LRC generation for {output_filename}: {e}", exc_info=True)
         return {'success': False, 'error': f"An unexpected error occurred: {e}"}
 
 
 if __name__ == '__main__':
+    # Basic setup for testing this module directly
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     sample_text_raw = "这是第一行字幕。\n这是第二行，稍微长一点。\n然后是第三行。\n最后是第四行，作为结束。"
-    # In Python strings, \n is already a newline. If the input was from a literal source that escaped it,
-    # then .replace("\\n", "\n") would be needed. Here, it's direct.
     processed_sample_text = sample_text_raw 
 
     sample_audio_duration = 15.0  # seconds
     output_dir = "subtitle_output"
     os.makedirs(output_dir, exist_ok=True)
-    print(f"Output directory: {os.path.abspath(output_dir)}")
+    logger.info(f"Output directory: {os.path.abspath(output_dir)}")
 
-    print(f"\n--- Testing Time Formatters ---")
-    print(f"SRT format for 65.123 seconds: {format_srt_time(65.123)}") # Expected: 00:01:05,123
-    print(f"SRT format for 3600 seconds: {format_srt_time(3600.0)}")   # Expected: 01:00:00,000
-    print(f"SRT format for 0.5 seconds: {format_srt_time(0.5)}")       # Expected: 00:00:00,500
-    print(f"LRC format for 65.12 seconds: {format_lrc_time(65.12)}")   # Expected: [01:05.12]
-    print(f"LRC format for 5.789 seconds: {format_lrc_time(5.789)}")   # Expected: [00:05.78]
-    print(f"LRC format for 123.456 seconds: {format_lrc_time(123.456)}")# Expected: [02:03.45]
+    logger.info(f"\n--- Testing Time Formatters ---")
+    logger.info(f"SRT format for 65.123 seconds: {format_srt_time(65.123)}") 
+    logger.info(f"SRT format for 3600 seconds: {format_srt_time(3600.0)}")   
+    logger.info(f"SRT format for 0.5 seconds: {format_srt_time(0.5)}")       
+    logger.info(f"LRC format for 65.12 seconds: {format_lrc_time(65.12)}")   
+    logger.info(f"LRC format for 5.789 seconds: {format_lrc_time(5.789)}")   
+    logger.info(f"LRC format for 123.456 seconds: {format_lrc_time(123.456)}")
 
 
-    print(f"\n--- Generating SRT subtitle ---")
+    logger.info(f"\n--- Generating SRT subtitle ---")
     srt_output_file = os.path.join(output_dir, "test_subtitle.srt")
     srt_result = generate_srt(processed_sample_text, sample_audio_duration, srt_output_file, 
                               lines_per_segment=1, segment_duration_seconds=3.5)
-    print(f"SRT Generation Result: {srt_result}")
+    logger.info(f"SRT Generation Result: {srt_result}")
     if srt_result['success']:
-        print(f"  SRT file: {os.path.abspath(srt_output_file)}")
-        # Optional: print content
-        print("  SRT Content:")
-        with open(srt_output_file, 'r', encoding='utf-8') as f:
-            print(f.read())
+        logger.info(f"  SRT file: {os.path.abspath(srt_output_file)}")
+        with open(srt_output_file, 'r', encoding='utf-8') as f_srt:
+            logger.debug(f"  SRT Content:\n{f_srt.read()}")
 
-    print(f"\n--- Generating SRT subtitle (2 lines per segment) ---")
+    logger.info(f"\n--- Generating SRT subtitle (2 lines per segment) ---")
     srt_output_file_2l = os.path.join(output_dir, "test_subtitle_2lines.srt")
     srt_result_2l = generate_srt(processed_sample_text, sample_audio_duration, srt_output_file_2l,
                                  lines_per_segment=2, segment_duration_seconds=6)
-    print(f"SRT Generation Result (2 lines): {srt_result_2l}")
+    logger.info(f"SRT Generation Result (2 lines): {srt_result_2l}")
     if srt_result_2l['success']:
-        print(f"  SRT file: {os.path.abspath(srt_output_file_2l)}")
-        print("  SRT Content (2 lines):")
-        with open(srt_output_file_2l, 'r', encoding='utf-8') as f:
-            print(f.read())
+        logger.info(f"  SRT file: {os.path.abspath(srt_output_file_2l)}")
+        with open(srt_output_file_2l, 'r', encoding='utf-8') as f_srt_2l:
+            logger.debug(f"  SRT Content (2 lines):\n{f_srt_2l.read()}")
 
 
-    print(f"\n--- Generating LRC subtitle ---")
+    logger.info(f"\n--- Generating LRC subtitle ---")
     lrc_output_file = os.path.join(output_dir, "test_subtitle.lrc")
     lrc_result = generate_lrc(processed_sample_text, sample_audio_duration, lrc_output_file)
-    print(f"LRC Generation Result: {lrc_result}")
+    logger.info(f"LRC Generation Result: {lrc_result}")
     if lrc_result['success']:
-        print(f"  LRC file: {os.path.abspath(lrc_output_file)}")
-        # Optional: print content
-        print("  LRC Content:")
-        with open(lrc_output_file, 'r', encoding='utf-8') as f:
-            print(f.read())
+        logger.info(f"  LRC file: {os.path.abspath(lrc_output_file)}")
+        with open(lrc_output_file, 'r', encoding='utf-8') as f_lrc:
+            logger.debug(f"  LRC Content:\n{f_lrc.read()}")
 
-    print(f"\n--- Test with short audio duration for SRT ---")
-    short_audio_duration = 3.0 # Shorter than one default segment
+    logger.info(f"\n--- Test with short audio duration for SRT ---")
+    short_audio_duration = 3.0 
     srt_short_output_file = os.path.join(output_dir, "test_subtitle_short.srt")
     srt_short_result = generate_srt(processed_sample_text, short_audio_duration, srt_short_output_file,
                                     lines_per_segment=1, segment_duration_seconds=5.0)
-    print(f"SRT Short Audio Result: {srt_short_result}")
+    logger.info(f"SRT Short Audio Result: {srt_short_result}")
     if srt_short_result['success']:
-        print(f"  SRT file (short): {os.path.abspath(srt_short_output_file)}")
-        print("  SRT Content (short):")
-        with open(srt_short_output_file, 'r', encoding='utf-8') as f:
-            print(f.read())
+        logger.info(f"  SRT file (short): {os.path.abspath(srt_short_output_file)}")
+        with open(srt_short_output_file, 'r', encoding='utf-8') as f_srt_short:
+            logger.debug(f"  SRT Content (short):\n{f_srt_short.read()}")
