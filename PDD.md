@@ -105,6 +105,10 @@
 *   **Tab 4: Results / Output**
     *   Display area showing progress/status of generation.
     *   List of generated content: News Title, Download MP3, Download SRT, Download LRC.
+    *   **Note on Intermediate Files:** Additionally, for each processed news item, the system saves intermediate text files to the `generated_files/` output directory:
+        *   `[filename_base]_original_content.txt`: Contains the full text content (title + summary) of the selected news item before any summarization is applied. This is the text used as input if summarization is chosen.
+        *   `[filename_base]_summarized_content.txt`: Contains the text content after summarization has been applied. This file is created only if summarization is used for the item. This summarized text then becomes the input for the TTS stage.
+        These files can be useful for reviewing the exact text input to the TTS stage or for debugging purposes. The `[filename_base]` corresponds to the one used for the MP3/SRT/LRC files.
 
 ## 6. Error Handling & User Feedback
 
