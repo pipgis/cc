@@ -222,12 +222,29 @@ def handle_generate_audio_subtitles(
         logger.info(item_log_prefix)
         log_messages.append(f"\n{item_log_prefix}")
 
+        # Define base_filename early for text saving
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        topic_prefix = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
+        safe_title_part = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip().replace(' ', '_')
+        base_filename = f"{timestamp}_{topic_prefix}{safe_title_part}"
+
+        # Save original selected content
+        original_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename}_original_content.txt")
+        try:
+            with open(original_content_filepath, "w", encoding="utf-8") as f:
+                f.write(text_for_tts) # text_for_tts initially holds the full original content
+            logger.info(f"Saved original content for '{original_title}' to {original_content_filepath}")
+            log_messages.append(f"  Saved original content to: {original_content_filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save original content for '{original_title}' to {original_content_filepath}: {e}", exc_info=True)
+            log_messages.append(f"  Error saving original content: {e}")
+
         if summarizer_choice != "None" and text_for_tts.strip():
             msg = f"  Attempting summarization with {summarizer_choice}..."
             logger.info(msg)
             log_messages.append(msg)
             summary_result = summarizer.summarize_text(
-                text_to_summarize=text_for_tts, service=summarizer_choice,
+                text_to_summarize=text_for_tts, service=summarizer_choice, # Use the original text_for_tts
                 api_key=(gemini_api_key_cfg if summarizer_choice == "gemini" else openrouter_api_key_cfg if summarizer_choice == "openrouter" else None),
                 ollama_model=ollama_model_name, ollama_api_url=ollama_api_url_cfg,
             )
@@ -236,15 +253,25 @@ def handle_generate_audio_subtitles(
                 logger.error(msg)
                 log_messages.append(msg)
             else:
-                text_for_tts = summary_result['summary']
-                msg = f"  Summarization Successful. New text length: {len(text_for_tts)}"
+                summarized_text = summary_result['summary']
+                msg = f"  Summarization Successful. New text length: {len(summarized_text)}"
                 logger.info(msg)
                 log_messages.append(msg)
+                
+                # Save summarized content
+                summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename}_summarized_content.txt")
+                try:
+                    with open(summarized_content_filepath, "w", encoding="utf-8") as f:
+                        f.write(summarized_text)
+                    logger.info(f"Saved summarized content for '{original_title}' to {summarized_content_filepath}")
+                    log_messages.append(f"  Saved summarized content to: {summarized_content_filepath}")
+                except Exception as e:
+                    logger.error(f"Failed to save summarized content for '{original_title}' to {summarized_content_filepath}: {e}", exc_info=True)
+                    log_messages.append(f"  Error saving summarized content: {e}")
+                
+                text_for_tts = summarized_text # Update text_for_tts to the summarized version for TTS
         
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        topic_prefix = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
-        safe_title_part = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip().replace(' ', '_')
-        base_filename = f"{timestamp}_{topic_prefix}{safe_title_part}"
+        # Filenames for audio and subtitles remain the same, using the established base_filename
         mp3_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.mp3")
         srt_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.srt")
         lrc_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.lrc")
