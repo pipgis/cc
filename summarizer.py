@@ -38,12 +38,35 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
         response = requests.post(chat_api_url, json=payload, timeout=60) # Increased timeout
         response.raise_for_status()
         response_data = response.json()
+        closing_think_tag = "</think>"
+
         if 'message' in response_data and 'content' in response_data['message']:
+            raw_summary = response_data['message']['content']
+            think_tag_index = raw_summary.find(closing_think_tag)
+            
+            if think_tag_index != -1:
+                logger.debug("Found and removed <think> block from Ollama /api/chat response.")
+                processed_summary = raw_summary[think_tag_index + len(closing_think_tag):]
+            else:
+                processed_summary = raw_summary
+            
+            summary = processed_summary.strip()
             logger.info(f"Ollama /api/chat summarization successful for model '{ollama_model}'.")
-            return {'summary': response_data['message']['content'].strip(), 'error': None}
+            return {'summary': summary, 'error': None}
+
         elif 'response' in response_data: # This is typical for /api/generate, but sometimes /api/chat might return this
-            logger.info(f"Ollama /api/chat (unexpectedly) returned /api/generate-like response for model '{ollama_model}'.")
-            return {'summary': response_data['response'].strip(), 'error': None}
+            raw_summary = response_data['response']
+            think_tag_index = raw_summary.find(closing_think_tag)
+
+            if think_tag_index != -1:
+                logger.debug("Found and removed <think> block from Ollama /api/chat (generate-like) response.")
+                processed_summary = raw_summary[think_tag_index + len(closing_think_tag):]
+            else:
+                processed_summary = raw_summary
+            
+            summary = processed_summary.strip()
+            logger.info(f"Ollama /api/chat (unexpectedly) returned /api/generate-like response for model '{ollama_model}'. Processed summary.")
+            return {'summary': summary, 'error': None}
         else:
             logger.error(f"Unexpected response structure from Ollama /api/chat for model '{ollama_model}': {response_data}")
             return {'summary': None, 'error': f"Unexpected response structure from Ollama /api/chat: {response_data}"}
@@ -61,8 +84,19 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
             response.raise_for_status()
             response_data = response.json()
             if 'response' in response_data:
+                raw_summary = response_data['response']
+                closing_think_tag = "</think>" # Defined again for clarity in this block
+                think_tag_index = raw_summary.find(closing_think_tag)
+
+                if think_tag_index != -1:
+                    logger.debug("Found and removed <think> block from Ollama /api/generate response.")
+                    processed_summary = raw_summary[think_tag_index + len(closing_think_tag):]
+                else:
+                    processed_summary = raw_summary
+                
+                summary = processed_summary.strip()
                 logger.info(f"Ollama /api/generate summarization successful for model '{ollama_model}'.")
-                return {'summary': response_data['response'].strip(), 'error': None}
+                return {'summary': summary, 'error': None}
             else:
                 logger.error(f"Unexpected response structure from Ollama /api/generate for model '{ollama_model}': {response_data}")
                 return {'summary': None, 'error': f"Unexpected response structure from Ollama /api/generate: {response_data}"}
