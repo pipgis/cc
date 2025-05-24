@@ -295,10 +295,10 @@ def handle_generate_audio_subtitles(
                     output_links_markdown += f"  - Error saving summarized text.\n"
                 
                 text_for_tts = summarized_text # Update text_for_tts to the summarized version for this item
-            else: # No summarization or summarization failed
-                # Ensure a newline if only original text link was added and no summarized file link.
-                if not output_links_markdown.strip().endswith("\n"):
-                    output_links_markdown += "\n"
+        else: # No summarization or summarization failed
+            # Ensure a newline if only original text link was added and no summarized file link.
+            if not output_links_markdown.strip().endswith("\n"):
+                output_links_markdown += "\n"
 
 
         # Add the final text (original or summarized) for this item to the global list
