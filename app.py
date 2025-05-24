@@ -180,6 +180,7 @@ def handle_generate_audio_subtitles(
 
     # Initialize collectors for global processing
     all_texts_for_global_processing = []
+    consolidated_selected_news_data = [] # For storing data of selected items for JSON export
     combined_text_for_audio = ""
 
     if not selected_indices:
@@ -218,48 +219,65 @@ def handle_generate_audio_subtitles(
         log_messages.append(msg)
         return "\n".join(log_messages), ""
 
-    msg = f"Processing {len(actual_selected_items)} selected news item(s) individually for text saving."
+    msg = f"Processing {len(actual_selected_items)} selected news item(s)."
     logger.info(msg)
     log_messages.append(msg)
 
-    timestamp_run = datetime.now().strftime("%Y%m%d%H%M%S") # Timestamp for this run's individual files
+    # timestamp_run = datetime.now().strftime("%Y%m%d%H%M%S") # Timestamp for this run's individual files - No longer needed for individual original files
 
     for item in actual_selected_items:
         original_title = item.get('_original_title', 'Untitled')
-        text_for_tts = item.get('_original_title', '') + ". " + item.get('_full_summary', '') # This will be the text for current item
+        full_summary = item.get('_full_summary', '')
+        text_for_tts = original_title + ". " + full_summary # This will be the text for current item for summarization/TTS
+
+        # Collect data for JSON export
+        item_data_for_json = {
+            'id': item.get('id'),
+            'original_title': original_title,
+            'full_summary': full_summary,
+            'source_url': item.get('source_url', 'N/A'),
+            'published_date': item.get('published_date', 'N/A')
+        }
+        consolidated_selected_news_data.append(item_data_for_json)
+
         item_log_prefix = f"Processing Item: {original_title}"
         logger.info(item_log_prefix)
         log_messages.append(f"\n{item_log_prefix}")
+        output_links_markdown += f"**{original_title}**:\n"
 
-        # Define base_filename for individual item's text files
+
+        # Define base_filename for item's summarized text files (if summarization happens)
+        # This base_filename might still be useful if summarization saves files.
+        timestamp_item_processing = datetime.now().strftime("%Y%m%d%H%M%S") # Timestamp for this specific item's processing artifacts if any
         topic_prefix_item = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
         safe_title_part_item = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip().replace(' ', '_')
-        base_filename_item = f"{timestamp_run}_{topic_prefix_item}{safe_title_part_item}"
-
-        # Save original selected content
-        original_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_original_content.txt")
+        base_filename_item = f"{timestamp_item_processing}_{topic_prefix_item}{safe_title_part_item}"
         
-        # DEBUG LOGS START
-        logger.debug(f"OUTPUT_DIR is: {OUTPUT_DIR}")
-        logger.debug(f"Calculated original_content_filepath is: {original_content_filepath}")
-        logger.debug(f"Does OUTPUT_DIR ({OUTPUT_DIR}) exist at this point? {os.path.exists(OUTPUT_DIR)}")
-        logger.debug(f"Is OUTPUT_DIR ({OUTPUT_DIR}) a directory? {os.path.isdir(OUTPUT_DIR)}")
-        # The following line is to check the directory part of original_content_filepath itself
-        logger.debug(f"Parent directory of original_content_filepath ({os.path.dirname(original_content_filepath)}) exists? {os.path.exists(os.path.dirname(original_content_filepath))}")
-        # DEBUG LOGS END
-        
-        output_links_markdown += f"**{original_title}**:\n"
-        try:
-            with open(original_content_filepath, "w", encoding="utf-8") as f:
-                f.write(text_for_tts) # text_for_tts initially holds the full original content
-            logger.info(f"Saved original content for '{original_title}' to {original_content_filepath}")
-            log_messages.append(f"  Saved original content to: {original_content_filepath}")
-            original_text_link = f"[{os.path.basename(original_content_filepath)}](./file={original_content_filepath})"
-            output_links_markdown += f"  - Original Text: {original_text_link}\n"
-        except Exception as e:
-            logger.error(f"Failed to save original content for '{original_title}' to {original_content_filepath}: {e}", exc_info=True)
-            log_messages.append(f"  Error saving original content: {e}")
-            output_links_markdown += f"  - Error saving original text.\n"
+        # Removed individual _original_content.txt saving logic as per requirements
+        # # Save original selected content
+        # original_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_original_content.txt")
+        # 
+        # # DEBUG LOGS START
+        # logger.debug(f"OUTPUT_DIR is: {OUTPUT_DIR}")
+        # logger.debug(f"Calculated original_content_filepath is: {original_content_filepath}")
+        # logger.debug(f"Does OUTPUT_DIR ({OUTPUT_DIR}) exist at this point? {os.path.exists(OUTPUT_DIR)}")
+        # logger.debug(f"Is OUTPUT_DIR ({OUTPUT_DIR}) a directory? {os.path.isdir(OUTPUT_DIR)}")
+        # # The following line is to check the directory part of original_content_filepath itself
+        # logger.debug(f"Parent directory of original_content_filepath ({os.path.dirname(original_content_filepath)}) exists? {os.path.exists(os.path.dirname(original_content_filepath))}")
+        # # DEBUG LOGS END
+        # 
+        # output_links_markdown += f"**{original_title}**:\n" # Moved up
+        # try:
+        #     with open(original_content_filepath, "w", encoding="utf-8") as f:
+        #         f.write(text_for_tts) # text_for_tts initially holds the full original content
+        #     logger.info(f"Saved original content for '{original_title}' to {original_content_filepath}")
+        #     log_messages.append(f"  Saved original content to: {original_content_filepath}")
+        #     original_text_link = f"[{os.path.basename(original_content_filepath)}](./file={original_content_filepath})"
+        #     output_links_markdown += f"  - Original Text: {original_text_link}\n"
+        # except Exception as e:
+        #     logger.error(f"Failed to save original content for '{original_title}' to {original_content_filepath}: {e}", exc_info=True)
+        #     log_messages.append(f"  Error saving original content: {e}")
+        #     output_links_markdown += f"  - Error saving original text.\n"
 
         if summarizer_choice != "None" and text_for_tts.strip():
             msg = f"  Attempting summarization with {summarizer_choice}..."
@@ -303,14 +321,40 @@ def handle_generate_audio_subtitles(
 
         # Add the final text (original or summarized) for this item to the global list
         all_texts_for_global_processing.append(text_for_tts)
+        # Ensure a newline if no summarized file link was added for this item.
+        if not output_links_markdown.strip().endswith("\n"):
+             output_links_markdown += "\n"
         output_links_markdown += "\n" # Add a newline after each item's text file links block
+
+    # --- Save consolidated data to JSON (after the loop) ---
+    if consolidated_selected_news_data:
+        json_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        json_filename = f"consolidated_selected_news_{json_timestamp}.json"
+        json_filepath = os.path.join(OUTPUT_DIR, json_filename)
+        try:
+            with open(json_filepath, "w", encoding="utf-8") as f:
+                json.dump(consolidated_selected_news_data, f, ensure_ascii=False, indent=4)
+            logger.info(f"Successfully saved consolidated selected news data to {json_filepath}")
+            log_messages.append(f"\nSaved consolidated selected news data to: {json_filepath}")
+            json_file_link = f"[{json_filename}](./file={json_filepath})"
+            # Insert this before the "Combined Output" section if it exists, or add a new section
+            # For simplicity, adding it here. Might need restructuring of output_links_markdown for perfect placement.
+            output_links_markdown = f"**Consolidated Selected News Data**:\n  - JSON File: {json_file_link}\n\n" + output_links_markdown
+
+        except Exception as e:
+            logger.error(f"Failed to save consolidated selected news data to {json_filepath}: {e}", exc_info=True)
+            log_messages.append(f"\nError saving consolidated news data: {e}")
+            output_links_markdown = f"**Consolidated Selected News Data**:\n  - Error saving JSON file.\n\n" + output_links_markdown
+    else:
+        log_messages.append("\nNo selected items to save to consolidated JSON.")
+
 
     # --- Global Processing (after the loop) ---
     if not all_texts_for_global_processing:
         msg = "No text collected from items for global audio generation. Aborting."
         logger.warning(msg)
         log_messages.append(msg)
-        final_msg = "\nIndividual text file processing completed. No content for global audio."
+        final_msg = "\nIndividual item processing completed. No content for global audio."
         log_messages.append(final_msg)
         logger.info(final_msg)
         # Return current logs and any item-specific text file links
@@ -562,7 +606,15 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             selected_df_indices_state = gr.State([])
 
             # Event handler for manual text input of indices
-            selected_news_indices_input.submit(
+            # Old .submit() event wiring:
+            # selected_news_indices_input.submit(
+            #     handle_textbox_selection,
+            #     inputs=[selected_news_indices_input, news_data_state_gr],
+            #     outputs=[selected_df_indices_state]
+            # )
+
+            # New .change() event wiring:
+            selected_news_indices_input.change(
                 handle_textbox_selection,
                 inputs=[selected_news_indices_input, news_data_state_gr],
                 outputs=[selected_df_indices_state]
