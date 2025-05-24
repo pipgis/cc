@@ -22,7 +22,9 @@ import subtitle_generator
 # Let's define a global variable to hold the fetched news data as a list of dicts
 # This will be used to populate the DataFrame and for processing.
 global_news_items_store = []
-OUTPUT_DIR = "generated_files"
+# Get the absolute path of the directory where app.py is located
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(APP_DIR, "generated_files")
 CONFIG_FILE = "app_config.json"
 LOG_FILE = "app.log"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -170,10 +172,15 @@ def handle_generate_audio_subtitles(
     """
     Generates audio and subtitles for selected news items.
     """
+    logger.debug(f"handle_generate_audio_subtitles: received selected_indices={selected_indices}, type={type(selected_indices)}")
     log_messages = [] # For returning to Gradio Textbox
     output_links_markdown = ""
     logger.info("Starting generation process...")
     log_messages.append("Starting generation process...")
+
+    # Initialize collectors for global processing
+    all_texts_for_global_processing = []
+    combined_text_for_audio = ""
 
     if not selected_indices:
         msg = "No news items selected for generation."
@@ -211,33 +218,48 @@ def handle_generate_audio_subtitles(
         log_messages.append(msg)
         return "\n".join(log_messages), ""
 
-    msg = f"Processing {len(actual_selected_items)} selected news item(s)."
+    msg = f"Processing {len(actual_selected_items)} selected news item(s) individually for text saving."
     logger.info(msg)
     log_messages.append(msg)
 
+    timestamp_run = datetime.now().strftime("%Y%m%d%H%M%S") # Timestamp for this run's individual files
+
     for item in actual_selected_items:
         original_title = item.get('_original_title', 'Untitled')
-        text_for_tts = item.get('_original_title', '') + ". " + item.get('_full_summary', '')
-        item_log_prefix = f"Processing: {original_title}"
+        text_for_tts = item.get('_original_title', '') + ". " + item.get('_full_summary', '') # This will be the text for current item
+        item_log_prefix = f"Processing Item: {original_title}"
         logger.info(item_log_prefix)
         log_messages.append(f"\n{item_log_prefix}")
 
-        # Define base_filename early for text saving
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        topic_prefix = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
-        safe_title_part = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip().replace(' ', '_')
-        base_filename = f"{timestamp}_{topic_prefix}{safe_title_part}"
+        # Define base_filename for individual item's text files
+        topic_prefix_item = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
+        safe_title_part_item = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip().replace(' ', '_')
+        base_filename_item = f"{timestamp_run}_{topic_prefix_item}{safe_title_part_item}"
 
         # Save original selected content
-        original_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename}_original_content.txt")
+        original_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_original_content.txt")
+        
+        # DEBUG LOGS START
+        logger.debug(f"OUTPUT_DIR is: {OUTPUT_DIR}")
+        logger.debug(f"Calculated original_content_filepath is: {original_content_filepath}")
+        logger.debug(f"Does OUTPUT_DIR ({OUTPUT_DIR}) exist at this point? {os.path.exists(OUTPUT_DIR)}")
+        logger.debug(f"Is OUTPUT_DIR ({OUTPUT_DIR}) a directory? {os.path.isdir(OUTPUT_DIR)}")
+        # The following line is to check the directory part of original_content_filepath itself
+        logger.debug(f"Parent directory of original_content_filepath ({os.path.dirname(original_content_filepath)}) exists? {os.path.exists(os.path.dirname(original_content_filepath))}")
+        # DEBUG LOGS END
+        
+        output_links_markdown += f"**{original_title}**:\n"
         try:
             with open(original_content_filepath, "w", encoding="utf-8") as f:
                 f.write(text_for_tts) # text_for_tts initially holds the full original content
             logger.info(f"Saved original content for '{original_title}' to {original_content_filepath}")
             log_messages.append(f"  Saved original content to: {original_content_filepath}")
+            original_text_link = f"[{os.path.basename(original_content_filepath)}](./file={original_content_filepath})"
+            output_links_markdown += f"  - Original Text: {original_text_link}\n"
         except Exception as e:
             logger.error(f"Failed to save original content for '{original_title}' to {original_content_filepath}: {e}", exc_info=True)
             log_messages.append(f"  Error saving original content: {e}")
+            output_links_markdown += f"  - Error saving original text.\n"
 
         if summarizer_choice != "None" and text_for_tts.strip():
             msg = f"  Attempting summarization with {summarizer_choice}..."
@@ -259,122 +281,153 @@ def handle_generate_audio_subtitles(
                 log_messages.append(msg)
                 
                 # Save summarized content
-                summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename}_summarized_content.txt")
+                summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_summarized_content.txt")
                 try:
                     with open(summarized_content_filepath, "w", encoding="utf-8") as f:
                         f.write(summarized_text)
                     logger.info(f"Saved summarized content for '{original_title}' to {summarized_content_filepath}")
                     log_messages.append(f"  Saved summarized content to: {summarized_content_filepath}")
+                    summarized_text_link = f"[{os.path.basename(summarized_content_filepath)}](./file={summarized_content_filepath})"
+                    output_links_markdown += f"  - Summarized Text: {summarized_text_link}\n"
                 except Exception as e:
                     logger.error(f"Failed to save summarized content for '{original_title}' to {summarized_content_filepath}: {e}", exc_info=True)
                     log_messages.append(f"  Error saving summarized content: {e}")
+                    output_links_markdown += f"  - Error saving summarized text.\n"
                 
-                text_for_tts = summarized_text # Update text_for_tts to the summarized version for TTS
-        
-        # Filenames for audio and subtitles remain the same, using the established base_filename
-        mp3_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.mp3")
-        srt_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.srt")
-        lrc_filename = os.path.join(OUTPUT_DIR, f"{base_filename}.lrc")
+                text_for_tts = summarized_text # Update text_for_tts to the summarized version for this item
+            else: # No summarization or summarization failed
+                # Ensure a newline if only original text link was added and no summarized file link.
+                if not output_links_markdown.strip().endswith("\n"):
+                    output_links_markdown += "\n"
 
-        msg = f"  Generating audio with {tts_service} ({tts_voice_gender})..."
+
+        # Add the final text (original or summarized) for this item to the global list
+        all_texts_for_global_processing.append(text_for_tts)
+        output_links_markdown += "\n" # Add a newline after each item's text file links block
+
+    # --- Global Processing (after the loop) ---
+    if not all_texts_for_global_processing:
+        msg = "No text collected from items for global audio generation. Aborting."
+        logger.warning(msg)
+        log_messages.append(msg)
+        final_msg = "\nIndividual text file processing completed. No content for global audio."
+        log_messages.append(final_msg)
+        logger.info(final_msg)
+        # Return current logs and any item-specific text file links
+        return "\n".join(log_messages), output_links_markdown.strip() + "\n\n**Combined Output**:\n  - No content for global audio."
+
+    combined_text_for_audio = "\n\n".join(all_texts_for_global_processing)
+    msg = f"Combined text from {len(all_texts_for_global_processing)} items for global audio. Total length: {len(combined_text_for_audio)}"
+    logger.info(msg)
+    log_messages.append(f"\n{msg}")
+
+    # Global Filename Generation
+    timestamp_global = datetime.now().strftime("%Y%m%d%H%M%S")
+    topic_prefix_global = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
+    base_filename_global = f"{timestamp_global}_{topic_prefix_global}combined_audio"
+
+    global_mp3_filename = os.path.join(OUTPUT_DIR, f"{base_filename_global}.mp3")
+    global_srt_filename = os.path.join(OUTPUT_DIR, f"{base_filename_global}.srt")
+    global_lrc_filename = os.path.join(OUTPUT_DIR, f"{base_filename_global}.lrc")
+
+    msg = f"Attempting global audio generation with {tts_service} ({tts_voice_gender})..."
+    logger.info(msg)
+    log_messages.append(msg)
+
+    # Prepare API key arguments for tts_generator.generate_audio
+    azure_api_key_to_pass = azure_tts_key_cfg if tts_service == "azure" else None
+    # Other API keys (Google, Minimax) are passed directly to tts_generator
+    
+    global_tts_result = tts_generator.generate_audio(
+        text_to_speak=combined_text_for_audio,
+        output_filename=global_mp3_filename,
+        service=tts_service,
+        voice_gender=tts_voice_gender,
+        api_key=azure_api_key_to_pass, # Used by Azure
+        azure_region=azure_tts_region_cfg,
+        google_credentials_path=google_tts_path_cfg,
+        minimax_api_key=minimax_tts_key_cfg,
+        minimax_group_id=minimax_tts_group_id_cfg
+    )
+
+    output_links_markdown += "**Combined Output**:\n" # Add heading for combined files
+
+    if global_tts_result['success']:
+        msg = f"  Global audio generated: {global_mp3_filename}"
         logger.info(msg)
         log_messages.append(msg)
-        # Prepare API key arguments for tts_generator.generate_audio
-        azure_api_key_to_pass = None
-        if tts_service == "azure":
-            azure_api_key_to_pass = azure_tts_key_cfg
-        # For Minimax, its specific key and group ID are passed directly as named arguments.
-        # Other services either don't need a generic api_key or use specific path args.
+        mp3_link_global = f"[{os.path.basename(global_mp3_filename)}](./file={global_mp3_filename})"
+        output_links_markdown += f"  - Audio: {mp3_link_global}\n"
 
-        tts_result = tts_generator.generate_audio(
-            text_to_speak=text_for_tts, 
-            output_filename=mp3_filename, 
-            service=tts_service, 
-            voice_gender=tts_voice_gender,
-            api_key=azure_api_key_to_pass,  # Generic API key, used by Azure
-            azure_region=azure_tts_region_cfg,
-            google_credentials_path=google_tts_path_cfg,
-            minimax_api_key=minimax_tts_key_cfg, # Specific key for Minimax
-            minimax_group_id=minimax_tts_group_id_cfg # Specific group ID for Minimax
-            # minimax_voice_id is not passed as it's not a UI input and handled by default in tts_generator
-        )
-
-        if tts_result['success']:
-            msg = f"  Audio generated: {mp3_filename}"
-            logger.info(msg)
-            log_messages.append(msg)
-            audio_duration_seconds = 0
-            try:
-                if os.path.exists(mp3_filename):
-                    audio = MP3(mp3_filename)
-                    audio_duration_seconds = audio.info.length
-                    msg = f"  Audio duration: {audio_duration_seconds:.2f} seconds."
-                    logger.info(msg)
-                    log_messages.append(msg)
-                else:
-                    msg = "  Error: MP3 file not found after TTS success reported."
-                    logger.error(msg)
-                    log_messages.append(msg)
-            except Exception as e:
-                msg = f"  Error getting audio duration: {e}. Subtitles might be misaligned."
-                logger.exception("Exception during audio duration reading:")
-                log_messages.append(msg)
-                if audio_duration_seconds == 0 and text_for_tts:
-                    estimated_duration = len(text_for_tts.split()) / 4.0 
-                    audio_duration_seconds = max(1.0, estimated_duration)
-                    msg = f"  Using estimated duration: {audio_duration_seconds:.2f}s for subtitles."
-                    logger.warning(msg)
-                    log_messages.append(msg)
-
-            if audio_duration_seconds > 0:
-                msg = f"  Generating SRT subtitles..."
+        global_audio_duration_seconds = 0
+        try:
+            if os.path.exists(global_mp3_filename):
+                audio = MP3(global_mp3_filename)
+                global_audio_duration_seconds = audio.info.length
+                msg = f"  Global audio duration: {global_audio_duration_seconds:.2f} seconds."
                 logger.info(msg)
                 log_messages.append(msg)
-                srt_result = subtitle_generator.generate_srt(text_for_tts, audio_duration_seconds, srt_filename)
-                if srt_result['success']:
-                    msg = f"  SRT generated: {srt_filename}"
-                    logger.info(msg)
-                    log_messages.append(msg)
-                else:
-                    msg = f"  SRT Generation Error: {srt_result['error']}"
-                    logger.error(msg)
-                    log_messages.append(msg)
-
-                msg = f"  Generating LRC subtitles..."
-                logger.info(msg)
-                log_messages.append(msg)
-                lrc_result = subtitle_generator.generate_lrc(text_for_tts, audio_duration_seconds, lrc_filename)
-                if lrc_result['success']:
-                    msg = f"  LRC generated: {lrc_filename}"
-                    logger.info(msg)
-                    log_messages.append(msg)
-                else:
-                    msg = f"  LRC Generation Error: {lrc_result['error']}"
-                    logger.error(msg)
-                    log_messages.append(msg)
-                
-                output_links_markdown += f"**{original_title}**:\n"
-                if tts_result['success']:
-                    mp3_link = f"[{os.path.basename(mp3_filename)}](./file={mp3_filename})"
-                    output_links_markdown += f"  - Audio: {mp3_link}\n"
-                if srt_result.get('success'):
-                    srt_link = f"[{os.path.basename(srt_filename)}](./file={srt_filename})"
-                    output_links_markdown += f"  - SRT: {srt_link}\n"
-                if lrc_result.get('success'):
-                    lrc_link = f"[{os.path.basename(lrc_filename)}](./file={lrc_filename})"
-                    output_links_markdown += f"  - LRC: {lrc_link}\n"
-                output_links_markdown += "\n"
             else:
-                msg = "  Skipping subtitle generation due to missing audio duration."
+                msg = "  Error: Global MP3 file not found after TTS success reported."
+                logger.error(msg)
+                log_messages.append(msg)
+        except Exception as e:
+            msg = f"  Error getting global audio duration: {e}. Subtitles might be misaligned."
+            logger.exception("Exception during global audio duration reading:")
+            log_messages.append(msg)
+            if global_audio_duration_seconds == 0 and combined_text_for_audio:
+                estimated_duration = len(combined_text_for_audio.split()) / 4.0 
+                global_audio_duration_seconds = max(1.0, estimated_duration)
+                msg = f"  Using estimated duration for global audio: {global_audio_duration_seconds:.2f}s for subtitles."
                 logger.warning(msg)
                 log_messages.append(msg)
-        else:
-            msg = f"  TTS Error: {tts_result['error']}"
-            logger.error(msg)
+
+        if global_audio_duration_seconds > 0:
+            msg = f"  Generating global SRT subtitles for combined audio..."
+            logger.info(msg)
             log_messages.append(msg)
-            output_links_markdown += f"**{original_title}**: Audio generation failed.\n\n"
+            # Use combined_text_for_audio for subtitle generation
+            global_srt_result = subtitle_generator.generate_srt(combined_text_for_audio, global_audio_duration_seconds, global_srt_filename)
+            if global_srt_result['success']:
+                msg = f"  Global SRT generated: {global_srt_filename}"
+                logger.info(msg)
+                log_messages.append(msg)
+                srt_link_global = f"[{os.path.basename(global_srt_filename)}](./file={global_srt_filename})"
+                output_links_markdown += f"  - SRT: {srt_link_global}\n"
+            else:
+                msg = f"  Global SRT Generation Error: {global_srt_result['error']}"
+                logger.error(msg)
+                log_messages.append(msg)
+                output_links_markdown += f"  - SRT: Generation failed.\n"
+
+            msg = f"  Generating global LRC subtitles for combined audio..."
+            logger.info(msg)
+            log_messages.append(msg)
+            # Use combined_text_for_audio for subtitle generation
+            global_lrc_result = subtitle_generator.generate_lrc(combined_text_for_audio, global_audio_duration_seconds, global_lrc_filename)
+            if global_lrc_result['success']:
+                msg = f"  Global LRC generated: {global_lrc_filename}"
+                logger.info(msg)
+                log_messages.append(msg)
+                lrc_link_global = f"[{os.path.basename(global_lrc_filename)}](./file={global_lrc_filename})"
+                output_links_markdown += f"  - LRC: {lrc_link_global}\n"
+            else:
+                msg = f"  Global LRC Generation Error: {global_lrc_result['error']}"
+                logger.error(msg)
+                log_messages.append(msg)
+                output_links_markdown += f"  - LRC: Generation failed.\n"
+        else:
+            msg = "  Skipping global subtitle generation due to missing global audio duration."
+            logger.warning(msg)
+            log_messages.append(msg)
+            output_links_markdown += "  - Subtitles: Skipped (no audio duration).\n"
+    else:
+        msg = f"  Global TTS Error: {global_tts_result['error']}"
+        logger.error(msg)
+        log_messages.append(msg)
+        output_links_markdown += f"  - Audio: Generation failed.\n"
             
-    final_msg = "\nGeneration process finished."
+    final_msg = "\nGlobal generation process finished."
     logger.info(final_msg)
     log_messages.append(final_msg)
     return "\n".join(log_messages), output_links_markdown
@@ -400,7 +453,7 @@ def handle_textbox_selection(text_input_indices_str: str, current_news_data: lis
                 logger.warning(f"Warning: Index {index} is out of range for current news data (size {len(current_news_data)}).")
         except ValueError:
             logger.warning(f"Warning: Non-integer value '{part}' found in selection input.")
-    logger.debug(f"handle_textbox_selection: parsed indices {valid_indices} from '{text_input_indices_str}'")
+    logger.debug(f"handle_textbox_selection: input='{text_input_indices_str}', parsed_indices={valid_indices}")
     return valid_indices
 
 
