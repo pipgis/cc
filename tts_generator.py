@@ -50,18 +50,56 @@ GOOGLE_TTS_VOICE_MAPPING = {
 }
 
 MINIMAX_TTS_VOICE_MAPPING = {
-    # Minimax voice_id seems to imply language and gender.
-    # This mapping needs to be based on available Minimax voice_ids.
-    # Placeholder - update with actual valid voice_ids from Minimax documentation.
-    "en": {"female": "female_en_voice", "male": "male_en_voice"},
-    "zh": {"female": "female_zh_voice", "male": "male-qn-qingse"}, # Example: "female-zh-XiaoMei"
-    # Defaulting to a known good Minimax voice if specific mapping isn't available,
-    # but this might not match desired language/gender.
-    # The example provided "male-qn-qingse" which seems to be Chinese Male.
-    # For now, let's use the example from the original code if no other mapping is found for Minimax
-    # This needs careful review based on Minimax's actual voice list.
-    # For this exercise, let's assume "male-qn-qingse" is a general fallback or a specific Chinese male voice.
-    # We will prioritize mapped voices first.
+    "zh": {
+        "male_qn_qingse": "male-qn-qingse",
+        "male_qn_jingying": "male-qn-jingying",
+        "male_qn_badao": "male-qn-badao",
+        "male_qn_daxuesheng": "male-qn-daxuesheng",
+        "female_shaonv": "female-shaonv",
+        "female_yujie": "female-yujie",
+        "female_chengshu": "female-chengshu",
+        "female_tianmei": "female-tianmei",
+        "presenter_male": "presenter_male",
+        "presenter_female": "presenter_female",
+        "audiobook_male_1": "audiobook_male_1",
+        "audiobook_male_2": "audiobook_male_2",
+        "audiobook_female_1": "audiobook_female_1",
+        "audiobook_female_2": "audiobook_female_2",
+        "male_qn_qingse_jingpin": "male-qn-qingse-jingpin",
+        "male_qn_jingying_jingpin": "male-qn-jingying-jingpin",
+        "male_qn_badao_jingpin": "male-qn-badao-jingpin",
+        "male_qn_daxuesheng_jingpin": "male-qn-daxuesheng-jingpin",
+        "female_shaonv_jingpin": "female-shaonv-jingpin",
+        "female_yujie_jingpin": "female-yujie-jingpin",
+        "female_chengshu_jingpin": "female-chengshu-jingpin",
+        "female_tianmei_jingpin": "female-tianmei-jingpin",
+        "clever_boy": "clever_boy",
+        "cute_boy": "cute_boy",
+        "lovely_girl": "lovely_girl",
+        "cartoon_pig": "cartoon_pig",
+        "bingjiao_didi": "bingjiao_didi",
+        "junlang_nanyou": "junlang_nanyou",
+        "chunzhen_xuedi": "chunzhen_xuedi",
+        "lengdan_xiongzhang": "lengdan_xiongzhang",
+        "badao_shaoye": "badao_shaoye",
+        "tianxin_xiaoling": "tianxin_xiaoling",
+        "qiaopi_mengmei": "qiaopi_mengmei",
+        "wumei_yujie": "wumei_yujie",
+        "diadia_xuemei": "diadia_xuemei",
+        "danya_xuejie": "danya_xuejie",
+    },
+    "en": {
+        "santa_claus": "Santa_Claus",
+        "grinch": "Grinch",
+        "rudolph": "Rudolph",
+        "arnold": "Arnold",
+        "charming_santa": "Charming_Santa",
+        "charming_lady": "Charming_Lady",
+        "sweet_girl": "Sweet_Girl",
+        "cute_elf": "Cute_Elf",
+        "attractive_girl": "Attractive_Girl",
+        "serene_woman": "Serene_Woman",
+    }
 }
 
 
@@ -229,37 +267,52 @@ def _generate_google_tts(text_to_speak: str, output_filename: str, language_code
         return {'success': False, 'error': f"Google TTS generation failed: {e}"}
 
 
-def _generate_minimax_tts(text_to_speak: str, output_filename: str, language_code: str, voice_gender: str = 'female',
-                          minimax_api_key: str = None, minimax_group_id: str = None, minimax_voice_id_param: str = None) -> dict: # Renamed minimax_voice_id to avoid conflict
+def _generate_minimax_tts(text_to_speak: str, output_filename: str, language_code: str, voice_name_key: str = None,
+                          minimax_api_key: str = None, minimax_group_id: str = None, 
+                          direct_voice_id_override: str = None, additional_settings: dict = None) -> dict:
     """
     Generates speech using Minimax TTS.
+    'voice_name_key' is used to look up the voice_id from MINIMAX_TTS_VOICE_MAPPING.
+    'direct_voice_id_override' allows specifying a voice_id directly, bypassing the mapping.
+    'additional_settings' allows specifying other parameters like speed, vol, pitch, emotion, etc.
     """
     if not minimax_api_key or not minimax_group_id:
         return {'success': False, 'error': "Minimax API Key and Group ID are required."}
 
-    selected_voice_id = MINIMAX_TTS_VOICE_MAPPING.get(language_code, {}).get(voice_gender.lower())
+    selected_voice_id = None
+    if direct_voice_id_override:
+        selected_voice_id = direct_voice_id_override
+        logger.info(f"MinimaxTTS: Using direct_voice_id_override: '{selected_voice_id}'.")
+    elif voice_name_key:
+        selected_voice_id = MINIMAX_TTS_VOICE_MAPPING.get(language_code, {}).get(voice_name_key)
+        if selected_voice_id:
+            logger.info(f"MinimaxTTS: Found voice_id '{selected_voice_id}' for lang '{language_code}', key '{voice_name_key}'.")
+        else:
+            logger.warning(f"MinimaxTTS: Voice key '{voice_name_key}' not found in mapping for language '{language_code}'.")
+            selected_voice_id = None 
     
-    # Fallback logic for Minimax voice_id if not found in mapping
     if not selected_voice_id:
-        if language_code == "zh" and voice_gender.lower() == "male": # Specific known example
-            selected_voice_id = "male-qn-qingse" 
-            logger.warning(f"MinimaxTTS: Voice for lang '{language_code}', gender '{voice_gender}' not in map. Using default '{selected_voice_id}'.")
-        else: # General fallback if no specific default known for the combo
-             # Using a known female Chinese voice as a general fallback if no other mapping found.
-             # This part might need adjustment based on available Minimax voices and desired default behavior.
-            selected_voice_id = "female-shaonv" 
-            logger.warning(f"MinimaxTTS: Voice for lang '{language_code}', gender '{voice_gender}' not in map. Using general fallback '{selected_voice_id}'. Update mapping for better results.")
-            # If minimax_voice_id_param was provided and no mapping, could use that as a last resort, but mappings are preferred.
-            # if minimax_voice_id_param:
-            #     selected_voice_id = minimax_voice_id_param
-            #     logger.warning(f"MinimaxTTS: Using provided minimax_voice_id_param '{selected_voice_id}' as fallback.")
+        if voice_name_key: 
+             logger.error(f"MinimaxTTS: Specified voice_name_key '{voice_name_key}' for language '{language_code}' is not valid and no direct_voice_id_override was given.")
+             return {'success': False, 'error': f"MinimaxTTS: Invalid voice_name_key '{voice_name_key}' for language '{language_code}'."}
+        else: 
+            if language_code == "zh":
+                default_key = "male_qn_qingse" 
+                selected_voice_id = MINIMAX_TTS_VOICE_MAPPING.get(language_code, {}).get(default_key)
+                logger.warning(f"MinimaxTTS: No voice_name_key or direct_voice_id_override specified for lang '{language_code}'. Using default key '{default_key}' -> voice_id '{selected_voice_id}'.")
+            elif language_code == "en":
+                default_key = "arnold" 
+                selected_voice_id = MINIMAX_TTS_VOICE_MAPPING.get(language_code, {}).get(default_key)
+                logger.warning(f"MinimaxTTS: No voice_name_key or direct_voice_id_override specified for lang '{language_code}'. Using default key '{default_key}' -> voice_id '{selected_voice_id}'.")
+            else:
+                logger.error(f"MinimaxTTS: No voice_name_key or direct_voice_id_override specified, and no default voice configured for language_code '{language_code}'.")
+                return {'success': False, 'error': f"MinimaxTTS: No voice specified and no default for lang '{language_code}'."}
 
+    if not selected_voice_id: 
+        logger.error(f"MinimaxTTS: Could not determine a voice_id to use for language_code '{language_code}'. Default key might be missing from mapping.")
+        return {'success': False, 'error': f"MinimaxTTS: Could not determine voice_id for lang '{language_code}'. Default key configuration issue."}
 
-    if not selected_voice_id: # If still no voice_id after fallbacks
-        logger.error(f"MinimaxTTS: No suitable voice_id found for language_code '{language_code}' and voice_gender '{voice_gender}'.")
-        return {'success': False, 'error': f"MinimaxTTS: No voice_id for lang '{language_code}', gender '{voice_gender}'."}
-
-    logger.info(f"MinimaxTTS: Using voice_id '{selected_voice_id}' for lang '{language_code}', gender '{voice_gender}'. Text: \"{text_to_speak[:30]}...\"")
+    logger.info(f"MinimaxTTS: Using voice_id '{selected_voice_id}' for lang '{language_code}'. Text: \"{text_to_speak[:30]}...\"")
     
     url = f"https://api.minimax.chat/v1/t2a_v2?GroupId={minimax_group_id}"
     headers = {
@@ -267,17 +320,34 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, language_cod
         'Content-Type': 'application/json',
         'Authorization': f"Bearer {minimax_api_key}"
     }
+
+    # Initialize voice_setting payload with defaults
+    voice_setting_payload = {
+        "speed": 1.0,
+        "vol": 1.0,
+        "pitch": 0
+    }
+    # Ensure selected_voice_id is primary
+    voice_setting_payload['voice_id'] = selected_voice_id
+
+    if additional_settings and isinstance(additional_settings, dict):
+        if 'speed' in additional_settings:
+            voice_setting_payload['speed'] = additional_settings['speed']
+        if 'vol' in additional_settings:
+            voice_setting_payload['vol'] = additional_settings['vol']
+        if 'pitch' in additional_settings:
+            voice_setting_payload['pitch'] = additional_settings['pitch']
+        # If additional_settings contains 'voice_id', it's ignored here to prioritize
+        # selected_voice_id determined by earlier logic (direct_override or mapping).
+        # If override from additional_settings was desired for voice_id itself,
+        # selected_voice_id logic would need adjustment or this part would change.
+        # Current task implies selected_voice_id is from prior logic.
     
     body_payload = {
-        "model": "speech-02-turbo", # Defaulting to speech-02-turbo as per previous example, may need adjustment
+        "model": "speech-02-turbo", 
         "text": text_to_speak,
-        "stream": True, # Assuming stream is preferred
-        "voice_setting": {
-            "voice_id": selected_voice_id, # Use the mapped voice_id
-            "speed": 1.0,
-            "vol": 1.0,
-            "pitch": 0
-        },
+        "stream": True,
+        "voice_setting": voice_setting_payload,
         "audio_setting": {
             "sample_rate": 32000,
             "bitrate": 128000,
@@ -286,6 +356,14 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, language_cod
         }
     }
 
+    if additional_settings and isinstance(additional_settings, dict):
+        if 'emotion' in additional_settings:
+            body_payload['emotion'] = additional_settings['emotion']
+        if 'latex_read' in additional_settings:
+            body_payload['latex_read'] = additional_settings['latex_read']
+        if 'english_normalization' in additional_settings:
+            body_payload['english_normalization'] = additional_settings['english_normalization']
+            
     try:
         response = requests.post(url, headers=headers, json=body_payload, stream=True, timeout=60)
         response.raise_for_status() # Check for initial HTTP errors (4xx or 5xx)
@@ -351,7 +429,8 @@ def generate_audio(text_to_speak: str, output_filename: str, service: str,
                    api_key: str = None, azure_region: str = None, 
                    google_credentials_path: str = None,
                    minimax_api_key: str = None, minimax_group_id: str = None, 
-                   minimax_voice_id: str = None) -> dict: # minimax_voice_id is original param, might be deprecated by mapping
+                   minimax_voice_id: str = None,
+                   minimax_additional_settings: dict = None) -> dict: # New parameter for Minimax
     """
     Generates audio using the specified TTS service.
     Ensures the output directory exists.
@@ -386,10 +465,10 @@ def generate_audio(text_to_speak: str, output_filename: str, service: str,
     elif service_lower == "google":
         return _generate_google_tts(text_to_speak, output_filename, language_code, voice_gender, google_credentials_path)
     elif service_lower == "minimax":
-        # Pass language_code, voice_gender, and other minimax params.
-        # minimax_voice_id is the original direct param, which might be superseded by mapping logic.
+        # Pass parameters including the new minimax_additional_settings
         return _generate_minimax_tts(text_to_speak, output_filename, language_code, voice_gender,
-                                     minimax_api_key, minimax_group_id, minimax_voice_id)
+                                     minimax_api_key, minimax_group_id, minimax_voice_id,
+                                     additional_settings=minimax_additional_settings)
     else:
         logger.error(f"Unsupported TTS service requested: {service}")
         return {'success': False, 'error': f"Unsupported TTS service: {service}"}
@@ -458,31 +537,127 @@ if __name__ == '__main__':
     minimax_group_id_test = os.environ.get("MINIMAX_GROUP_ID")
 
     if not minimax_api_key_test or not minimax_group_id_test:
-        logger.warning("Minimax credentials not set (MINIMAX_API_KEY, MINIMAX_GROUP_ID). Skipping.")
+        logger.warning("Minimax credentials not set (MINIMAX_API_KEY, MINIMAX_GROUP_ID). Skipping Minimax TTS tests.")
     else:
-        # Example for Chinese, assuming Minimax has good Chinese voices by default or via mapping
-        lang_zh, text_zh = "zh", test_langs["zh"]
-        minimax_output_file_zh = os.path.join(output_dir, f"minimax_tts_female_{lang_zh}_test.mp3")
-        minimax_result_zh = generate_audio(text_zh, minimax_output_file_zh, "minimax",
-                                        voice_gender="female", language_code=lang_zh, # Testing Chinese
-                                        minimax_api_key=minimax_api_key_test, 
-                                        minimax_group_id=minimax_group_id_test)
-        logger.info(f"MinimaxTTS (Female, {lang_zh}) Result: {minimax_result_zh}")
-        if minimax_result_zh['success']:
-             logger.info(f"  Output: {os.path.abspath(minimax_output_file_zh)}")
+        logger.info("--- Starting Minimax TTS Tests ---")
+        text_zh = test_langs["zh"]
+        text_en = test_langs["en"]
+
+        # 1. Test specific Chinese voice via mapping
+        logger.info("Testing MinimaxTTS: Chinese voice 'female_yujie' via mapping...")
+        minimax_output_file_zh_yujie = os.path.join(output_dir, "minimax_tts_zh_yujie_test.mp3")
+        result_zh_yujie = generate_audio(
+            text_to_speak=text_zh,
+            output_filename=minimax_output_file_zh_yujie,
+            service="minimax",
+            language_code="zh",
+            voice_gender="female_yujie", # This is the voice_name_key
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (Zh, female_yujie) Result: {result_zh_yujie}")
+        if result_zh_yujie.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_zh_yujie)}")
+
+        # 2. Test specific English voice via mapping
+        logger.info("Testing MinimaxTTS: English voice 'santa_claus' via mapping...")
+        minimax_output_file_en_santa = os.path.join(output_dir, "minimax_tts_en_santa_test.mp3")
+        result_en_santa = generate_audio(
+            text_to_speak=text_en,
+            output_filename=minimax_output_file_en_santa,
+            service="minimax",
+            language_code="en",
+            voice_gender="santa_claus", # This is the voice_name_key
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (En, santa_claus) Result: {result_en_santa}")
+        if result_en_santa.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_en_santa)}")
+
+        # 3. Test direct voice ID override
+        logger.info("Testing MinimaxTTS: Direct voice ID override 'male-qn-jingying' for Chinese...")
+        minimax_output_file_direct_override = os.path.join(output_dir, "minimax_tts_zh_direct_override_test.mp3")
+        result_direct_override = generate_audio(
+            text_to_speak=text_zh,
+            output_filename=minimax_output_file_direct_override,
+            service="minimax",
+            language_code="zh",
+            minimax_voice_id="male-qn-jingying", # Direct override
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (Zh, Direct Override 'male-qn-jingying') Result: {result_direct_override}")
+        if result_direct_override.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_direct_override)}")
+            
+        # 4. Test with minimax_additional_settings
+        logger.info("Testing MinimaxTTS: Chinese voice 'female_tianmei' with additional settings...")
+        minimax_output_file_custom_settings = os.path.join(output_dir, "minimax_tts_zh_custom_settings_test.mp3")
+        custom_settings = {
+            "speed": 1.2,
+            "vol": 0.8,
+            "pitch": 2,
+            # "emotion": "happy" # Emotion might not be supported by all voices or models, test carefully based on docs.
+                               # For now, testing without emotion to ensure broader compatibility.
+        }
+        result_custom_settings = generate_audio(
+            text_to_speak=text_zh,
+            output_filename=minimax_output_file_custom_settings,
+            service="minimax",
+            language_code="zh",
+            voice_gender="female_tianmei",
+            minimax_additional_settings=custom_settings,
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (Zh, female_tianmei, Custom Settings) Result: {result_custom_settings}")
+        if result_custom_settings.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_custom_settings)}")
+
+        # 5. Test default voice (no specific voice key or override)
+        logger.info("Testing MinimaxTTS: Default Chinese voice (no voice_gender or minimax_voice_id)...")
+        minimax_output_file_zh_default = os.path.join(output_dir, "minimax_tts_zh_default_test.mp3")
+        # Note: generate_audio's voice_gender defaults to 'female'. 
+        # To truly test the default logic in _generate_minimax_tts (where voice_name_key is None),
+        # we might need to pass voice_gender=None if the default 'female' isn't a valid key.
+        # However, the current _generate_minimax_tts logic handles a non-None voice_name_key ('female')
+        # that's not in the mapping by erroring out, which is fine.
+        # To test the "no voice_name_key provided" path in _generate_minimax_tts,
+        # we ensure voice_gender is not a valid key and minimax_voice_id is not set.
+        # The default 'female' for voice_gender in generate_audio will cause an error as 'female' is not a valid key.
+        # To test the intended default fallback in _generate_minimax_tts, we should call it such that voice_name_key becomes None.
+        # This means passing voice_gender=None to generate_audio.
+        result_zh_default = generate_audio(
+            text_to_speak=text_zh,
+            output_filename=minimax_output_file_zh_default,
+            service="minimax",
+            language_code="zh",
+            voice_gender=None, # Explicitly None to test the default logic in _generate_minimax_tts
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (Zh, Default) Result: {result_zh_default}")
+        if result_zh_default.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_zh_default)}")
+
+        logger.info("Testing MinimaxTTS: Default English voice (no voice_gender or minimax_voice_id)...")
+        minimax_output_file_en_default = os.path.join(output_dir, "minimax_tts_en_default_test.mp3")
+        result_en_default = generate_audio(
+            text_to_speak=text_en,
+            output_filename=minimax_output_file_en_default,
+            service="minimax",
+            language_code="en",
+            voice_gender=None, # Explicitly None to test the default logic in _generate_minimax_tts
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (En, Default) Result: {result_en_default}")
+        if result_en_default.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_en_default)}")
         
-        # Example for English
-        lang_en, text_en = "en", test_langs["en"]
-        minimax_output_file_en = os.path.join(output_dir, f"minimax_tts_female_{lang_en}_test.mp3")
-        minimax_result_en = generate_audio(text_en, minimax_output_file_en, "minimax",
-                                        voice_gender="female", language_code=lang_en, # Testing English
-                                        minimax_api_key=minimax_api_key_test, 
-                                        minimax_group_id=minimax_group_id_test)
-        logger.info(f"MinimaxTTS (Female, {lang_en}) Result: {minimax_result_en}")
-        if minimax_result_en['success']:
-             logger.info(f"  Output: {os.path.abspath(minimax_output_file_en)}")
+        logger.info("--- Finished Minimax TTS Tests ---")
 
-
-    logger.info("\n--- Finished TTS Tests ---")
+    logger.info("\n--- Finished ALL TTS Tests ---")
     logger.info(f"Please check the '{output_dir}' directory for any generated MP3 files.")
     logger.info("For cloud services, ensure you have installed their respective SDKs (e.g., pip install azure-cognitiveservices-speech google-cloud-texttospeech) and configured credentials.")
