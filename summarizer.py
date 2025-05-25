@@ -215,7 +215,8 @@ def _summarize_openrouter(text_to_summarize: str, api_key: str, model: str = "mi
 
 def summarize_text(text_to_summarize: str, service: str, api_key: str = None, 
                    ollama_model: str = None, ollama_api_url: str = None, 
-                   openrouter_model: str = "mistralai/mistral-7b-instruct-v0.2") -> dict:
+                   openrouter_model: str = "mistralai/mistral-7b-instruct-v0.2",
+                   target_language: str = None) -> dict:
     """
     Summarizes text using the specified service.
     """
@@ -224,6 +225,9 @@ def summarize_text(text_to_summarize: str, service: str, api_key: str = None,
         return {'summary': None, 'error': "Input text is empty or whitespace."}
 
     logger.info(f"Summarizing text using service: {service}")
+    if target_language:
+        logger.info(f"Summarization called with target_language: {target_language}")
+
     if service == "ollama":
         return _summarize_ollama(text_to_summarize, ollama_model, ollama_api_url)
     elif service == "gemini":

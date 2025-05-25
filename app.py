@@ -175,6 +175,9 @@ def handle_generate_audio_subtitles(
     """
     Generates audio and subtitles for selected news items.
     """
+    logger.info(f"DEBUG: Received tts_service: {tts_service}")
+    logger.info(f"DEBUG: Received tts_voice_gender: {tts_voice_gender}")
+    logger.info(f"DEBUG: Received target_language_choice: {target_language_choice}")
     logger.debug(f"handle_generate_audio_subtitles: received selected_indices={selected_indices}, type={type(selected_indices)}")
     log_messages = [] # For returning to Gradio Textbox
     output_links_markdown = ""
