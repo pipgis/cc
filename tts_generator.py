@@ -54,7 +54,7 @@ MINIMAX_TTS_VOICE_MAPPING = {
     # This mapping needs to be based on available Minimax voice_ids.
     # Placeholder - update with actual valid voice_ids from Minimax documentation.
     "en": {"female": "female_en_voice", "male": "male_en_voice"},
-    "zh": {"female": "female_zh_voice", "male": "male_zh_voice"}, # Example: "female-zh-XiaoMei"
+    "zh": {"female": "female_zh_voice", "male": "male-qn-qingse"}, # Example: "female-zh-XiaoMei"
     # Defaulting to a known good Minimax voice if specific mapping isn't available,
     # but this might not match desired language/gender.
     # The example provided "male-qn-qingse" which seems to be Chinese Male.
