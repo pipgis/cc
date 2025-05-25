@@ -175,9 +175,6 @@ def handle_generate_audio_subtitles(
     """
     Generates audio and subtitles for selected news items.
     """
-    logger.info(f"DEBUG: Received tts_service: {tts_service}")
-    logger.info(f"DEBUG: Received tts_voice_gender: {tts_voice_gender}")
-    logger.info(f"DEBUG: Received target_language_choice: {target_language_choice}")
     logger.debug(f"handle_generate_audio_subtitles: received selected_indices={selected_indices}, type={type(selected_indices)}")
     log_messages = [] # For returning to Gradio Textbox
     output_links_markdown = ""
@@ -505,12 +502,20 @@ def handle_generate_audio_subtitles(
             msg = f"  Generating global SRT subtitles for combined audio..."
             logger.info(msg)
             log_messages.append(msg)
+
+            # Ensure max_chars_per_segment_cfg is an int for SRT generation
+            try:
+                max_chars_for_srt = int(max_chars_per_segment_cfg)
+            except ValueError:
+                logger.error(f"Could not convert max_chars_per_segment_cfg '{max_chars_per_segment_cfg}' to int. Defaulting to 50 for SRT.")
+                max_chars_for_srt = 50
+            
             # Use combined_text_for_audio for subtitle generation
             global_srt_result = subtitle_generator.generate_srt(
                 text_content=combined_text_for_audio, 
                 audio_duration_seconds=global_audio_duration_seconds, 
                 output_filename=global_srt_filename,
-                max_chars_per_segment=max_chars_per_segment_cfg # Pass the new parameter
+                max_chars_per_segment=max_chars_for_srt # Use the validated integer
             )
             if global_srt_result['success']:
                 msg = f"  Global SRT generated: {global_srt_filename}"
@@ -751,11 +756,11 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                     gen_news_topic,
                     gen_summarizer_choice, gen_ollama_model_name, cfg_ollama_url, # Summarizer
                     cfg_gemini_key, cfg_openrouter_key,                         # Summarizer APIs
-                    gen_target_language,                                        # New Language choice
                     gen_tts_service, gen_tts_voice_gender,                      # TTS
-                    gen_max_chars_segment,                                      # New Subtitle Option
+                    gen_max_chars_segment,                                      # Subtitle option (now correctly mapped to max_chars_per_segment_cfg)
                     cfg_azure_tts_key, cfg_azure_tts_region,                    # TTS APIs
-                    cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id  # TTS APIs
+                    cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id, # TTS APIs
+                    gen_target_language                                         # Target Language (now correctly mapped to target_language_choice)
                 ],
                 outputs=[generation_status_log, gr.Markdown(label="Generated Files")] # Output to log and results tab area
                 # The results tab area needs to be named for the output to go there.
