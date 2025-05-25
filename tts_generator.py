@@ -284,18 +284,43 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, language_cod
         selected_voice_id = direct_voice_id_override
         logger.info(f"MinimaxTTS: Using direct_voice_id_override: '{selected_voice_id}'.")
     elif voice_name_key:
+        # Backward compatibility for generic 'male'/'female' keys
+        # This check is implicitly covered by being inside 'elif voice_name_key:'
+        # and the 'if direct_voice_id_override:' check has already passed.
+        original_voice_name_key = voice_name_key # Keep original for logging if needed
+        if language_code == "zh":
+            if voice_name_key == "male":
+                voice_name_key = "male_qn_qingse" # Default Chinese male
+                logger.info(f"MinimaxTTS: Remapped generic key '{original_voice_name_key}' to '{voice_name_key}' for lang 'zh'.")
+            elif voice_name_key == "female":
+                voice_name_key = "female_shaonv" # Default Chinese female
+                logger.info(f"MinimaxTTS: Remapped generic key '{original_voice_name_key}' to '{voice_name_key}' for lang 'zh'.")
+        elif language_code == "en":
+            if voice_name_key == "male":
+                voice_name_key = "arnold" # Default English male (maps to 'Arnold')
+                logger.info(f"MinimaxTTS: Remapped generic key '{original_voice_name_key}' to '{voice_name_key}' for lang 'en'.")
+            elif voice_name_key == "female":
+                voice_name_key = "charming_lady" # Default English female (maps to 'Charming_Lady')
+                logger.info(f"MinimaxTTS: Remapped generic key '{original_voice_name_key}' to '{voice_name_key}' for lang 'en'.")
+        # Add more remappings if other generic keys were previously used and need defaults.
+        
         selected_voice_id = MINIMAX_TTS_VOICE_MAPPING.get(language_code, {}).get(voice_name_key)
         if selected_voice_id:
-            logger.info(f"MinimaxTTS: Found voice_id '{selected_voice_id}' for lang '{language_code}', key '{voice_name_key}'.")
+            logger.info(f"MinimaxTTS: Found voice_id '{selected_voice_id}' for lang '{language_code}', key '{voice_name_key}' (original key if remapped: '{original_voice_name_key}').")
         else:
-            logger.warning(f"MinimaxTTS: Voice key '{voice_name_key}' not found in mapping for language '{language_code}'.")
+            # If voice_name_key was remapped, original_voice_name_key holds the original.
+            # If not remapped, original_voice_name_key == voice_name_key.
+            logger.warning(f"MinimaxTTS: Voice key '{voice_name_key}' (original key if remapped: '{original_voice_name_key}') not found in mapping for language '{language_code}'.")
             selected_voice_id = None 
     
     if not selected_voice_id:
+        # If voice_name_key was provided (even if it was a generic one that got remapped and still failed, or was specific and failed)
         if voice_name_key: 
-             logger.error(f"MinimaxTTS: Specified voice_name_key '{voice_name_key}' for language '{language_code}' is not valid and no direct_voice_id_override was given.")
-             return {'success': False, 'error': f"MinimaxTTS: Invalid voice_name_key '{voice_name_key}' for language '{language_code}'."}
-        else: 
+             # Use original_voice_name_key in error if it exists (i.e., if we entered the voice_name_key block)
+             key_in_error = original_voice_name_key if 'original_voice_name_key' in locals() else voice_name_key
+             logger.error(f"MinimaxTTS: Specified voice_name_key '{key_in_error}' for language '{language_code}' is not valid (or remapped key '{voice_name_key}' is not valid) and no direct_voice_id_override was given.")
+             return {'success': False, 'error': f"MinimaxTTS: Invalid voice_name_key '{key_in_error}' for language '{language_code}'."}
+        else: # No voice_name_key provided at all (and no direct_voice_id_override). Attempt to use a default.
             if language_code == "zh":
                 default_key = "male_qn_qingse" 
                 selected_voice_id = MINIMAX_TTS_VOICE_MAPPING.get(language_code, {}).get(default_key)
@@ -655,6 +680,72 @@ if __name__ == '__main__':
         logger.info(f"MinimaxTTS (En, Default) Result: {result_en_default}")
         if result_en_default.get('success'):
             logger.info(f"  Output: {os.path.abspath(minimax_output_file_en_default)}")
+
+        # 6. Test backward compatibility for generic voice keys
+        logger.info("--- Testing MinimaxTTS: Backward Compatibility for Generic Keys ---")
+        # Chinese 'male'
+        logger.info("Testing MinimaxTTS: Chinese 'male' (backward compatibility)...")
+        minimax_output_file_zh_compat_male = os.path.join(output_dir, "minimax_tts_zh_compat_male_test.mp3")
+        result_zh_compat_male = generate_audio(
+            text_to_speak=text_zh,
+            output_filename=minimax_output_file_zh_compat_male,
+            service="minimax",
+            language_code="zh",
+            voice_gender="male", # Generic key
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (Zh, Compat 'male') Result: {result_zh_compat_male}")
+        if result_zh_compat_male.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_zh_compat_male)}")
+
+        # Chinese 'female'
+        logger.info("Testing MinimaxTTS: Chinese 'female' (backward compatibility)...")
+        minimax_output_file_zh_compat_female = os.path.join(output_dir, "minimax_tts_zh_compat_female_test.mp3")
+        result_zh_compat_female = generate_audio(
+            text_to_speak=text_zh,
+            output_filename=minimax_output_file_zh_compat_female,
+            service="minimax",
+            language_code="zh",
+            voice_gender="female", # Generic key
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (Zh, Compat 'female') Result: {result_zh_compat_female}")
+        if result_zh_compat_female.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_zh_compat_female)}")
+
+        # English 'male'
+        logger.info("Testing MinimaxTTS: English 'male' (backward compatibility)...")
+        minimax_output_file_en_compat_male = os.path.join(output_dir, "minimax_tts_en_compat_male_test.mp3")
+        result_en_compat_male = generate_audio(
+            text_to_speak=text_en,
+            output_filename=minimax_output_file_en_compat_male,
+            service="minimax",
+            language_code="en",
+            voice_gender="male", # Generic key
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (En, Compat 'male') Result: {result_en_compat_male}")
+        if result_en_compat_male.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_en_compat_male)}")
+
+        # English 'female'
+        logger.info("Testing MinimaxTTS: English 'female' (backward compatibility)...")
+        minimax_output_file_en_compat_female = os.path.join(output_dir, "minimax_tts_en_compat_female_test.mp3")
+        result_en_compat_female = generate_audio(
+            text_to_speak=text_en,
+            output_filename=minimax_output_file_en_compat_female,
+            service="minimax",
+            language_code="en",
+            voice_gender="female", # Generic key
+            minimax_api_key=minimax_api_key_test,
+            minimax_group_id=minimax_group_id_test
+        )
+        logger.info(f"MinimaxTTS (En, Compat 'female') Result: {result_en_compat_female}")
+        if result_en_compat_female.get('success'):
+            logger.info(f"  Output: {os.path.abspath(minimax_output_file_en_compat_female)}")
         
         logger.info("--- Finished Minimax TTS Tests ---")
 
