@@ -66,8 +66,8 @@ env_vars_to_check = [
     "GEMINI_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_API_BASE_URL",
     "AZURE_TTS_API_KEY", "AZURE_TTS_REGION", 
     "GOOGLE_CLOUD_TTS_CREDENTIALS_PATH",
-    "MINIMAX_API_KEY", "MINIMAX_GROUP_ID",
-    "TRANSLATION_API_KEY" # Added Translation API Key
+    "MINIMAX_API_KEY", "MINIMAX_GROUP_ID"
+    # "TRANSLATION_API_KEY" # Removed as Ollama is used for translation
 ]
 for var_name in env_vars_to_check:
     if os.getenv(var_name):
@@ -248,14 +248,15 @@ def handle_generate_audio_subtitles(
         
         # Actual Translation Step
         if target_lang_code_for_processing:
-            logger.info(f"Attempting translation of item '{original_title}' to {target_lang_code_for_processing}...")
-            current_translation_api_key = os.getenv("TRANSLATION_API_KEY") # Using os.getenv for now
+            logger.info(f"Attempting translation of item '{original_title}' to {target_lang_code_for_processing} using Ollama model '{ollama_model_name}' at URL '{ollama_api_url_cfg}'...")
+            # current_translation_api_key = os.getenv("TRANSLATION_API_KEY") # No longer needed for Ollama
             
             translation_result = translator.translate_text(
                 text=text_for_tts,
                 target_lang_code=target_lang_code_for_processing,
                 source_lang_code="auto", # Or a fixed source like "en"
-                api_key=current_translation_api_key 
+                ollama_model=ollama_model_name, # Pass the Ollama model name from UI
+                ollama_api_url=ollama_api_url_cfg  # Pass the Ollama API URL from UI config
             )
             if translation_result['error']:
                 logger.error(f"Translation Error for item '{original_title}': {translation_result['error']}")
@@ -627,16 +628,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                 with gr.Column():
                     cfg_minimax_key = gr.Textbox(label="Minimax API Key (TTS)", type="password", lines=1, value=os.getenv("MINIMAX_API_KEY", ""))
                     cfg_minimax_group_id = gr.Textbox(label="Minimax Group ID (TTS)", lines=1, value=os.getenv("MINIMAX_GROUP_ID", ""))
-            with gr.Row(): # New row for Translation API Key
-                with gr.Column():
-                    cfg_translation_key = gr.Textbox(
-                        label="Translation API Key (e.g., for Google Translate)", 
-                        type="password", 
-                        lines=1, 
-                        value=os.getenv("TRANSLATION_API_KEY", "")
-                    )
-                with gr.Column(): # Empty column to maintain layout if needed, or add other settings
-                    pass
+            # Removed the Row that contained cfg_translation_key
             
             gr.Markdown("API keys and other configurations are primarily managed via the `.env` file or environment variables. Changes made here are for the current session only unless your environment variables are updated externally.")
 
