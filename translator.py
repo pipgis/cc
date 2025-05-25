@@ -48,11 +48,21 @@ def translate_text(text: str, target_lang_code: str, source_lang_code: str = "au
     lang_map = {"en": "English", "zh": "Chinese", "es": "Spanish", "fr": "French"}
     target_lang_display = lang_map.get(target_lang_code.lower(), f"'{target_lang_code}'")
 
-    prompt = (
-        f"Translate the following text from {source_lang_display} to {target_lang_display}. "
-        f"Respond with *only* the translated text, without any introductory phrases, labels, or any other additional content.\n\n"
-        f"Original text to translate:\n{text}"
-    )
+    if target_lang_code.lower() == 'zh':
+        prompt = (
+            f"Translate the following text from {source_lang_display} to {target_lang_display}. "
+            f"Ensure all named entities and terms are translated into {target_lang_display} unless they are universally recognized acronyms that are commonly used in {target_lang_display}. "
+            f"Respond with *only* the translated text, without any introductory phrases, labels, or any other additional content. "
+            f"It is crucial that your response contains *only* the translated text and nothing else.\n\n"
+            f"Original text to translate:\n{text}"
+        )
+    else:
+        prompt = (
+            f"Translate the following text from {source_lang_display} to {target_lang_display}. "
+            f"Respond with *only* the translated text, without any introductory phrases, labels, or any other additional content. "
+            f"It is crucial that your response contains *only* the translated text and nothing else.\n\n"
+            f"Original text to translate:\n{text}"
+        )
 
     payload = {
         "model": ollama_model,
