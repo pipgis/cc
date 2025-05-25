@@ -164,9 +164,10 @@ def handle_generate_audio_subtitles(
     news_data_state, 
     news_topic,
     summarizer_choice, ollama_model_name, ollama_api_url_cfg,
-    gemini_api_key_cfg, openrouter_api_key_cfg,            
-    tts_service, tts_voice_gender,                         
-    azure_tts_key_cfg, azure_tts_region_cfg,               
+    gemini_api_key_cfg, openrouter_api_key_cfg,
+    tts_service, tts_voice_gender,
+    max_chars_per_segment_cfg, # New parameter for max chars per segment
+    azure_tts_key_cfg, azure_tts_region_cfg,
     google_tts_path_cfg, minimax_tts_key_cfg, minimax_tts_group_id_cfg
 ):
     """
@@ -431,7 +432,12 @@ def handle_generate_audio_subtitles(
             logger.info(msg)
             log_messages.append(msg)
             # Use combined_text_for_audio for subtitle generation
-            global_srt_result = subtitle_generator.generate_srt(combined_text_for_audio, global_audio_duration_seconds, global_srt_filename)
+            global_srt_result = subtitle_generator.generate_srt(
+                text_content=combined_text_for_audio, 
+                audio_duration_seconds=global_audio_duration_seconds, 
+                output_filename=global_srt_filename,
+                max_chars_per_segment=max_chars_per_segment_cfg # Pass the new parameter
+            )
             if global_srt_result['success']:
                 msg = f"  Global SRT generated: {global_srt_filename}"
                 logger.info(msg)
@@ -583,6 +589,9 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             with gr.Row():
                 gen_tts_service = gr.Dropdown(label="Select TTS Service", choices=["edge_tts", "azure", "google", "minimax"], value="edge_tts")
                 gen_tts_voice_gender = gr.Dropdown(label="Select Voice Gender (for selected TTS)", choices=["female", "male"], value="female")
+            
+            gr.Markdown("### Subtitle Options")
+            gen_max_chars_segment = gr.Slider(label="Max Characters per Subtitle Segment", minimum=20, maximum=150, value=50, step=5, interactive=True)
 
             generate_button = gr.Button("Generate Audio & Subtitles")
             generation_status_log = gr.Textbox(label="Generation Status/Log", lines=10, interactive=False)
@@ -662,6 +671,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                     gen_summarizer_choice, gen_ollama_model_name, cfg_ollama_url, # Summarizer
                     cfg_gemini_key, cfg_openrouter_key,                         # Summarizer APIs
                     gen_tts_service, gen_tts_voice_gender,                      # TTS
+                    gen_max_chars_segment,                                      # New Subtitle Option
                     cfg_azure_tts_key, cfg_azure_tts_region,                    # TTS APIs
                     cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id  # TTS APIs
                 ],
