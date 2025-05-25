@@ -235,6 +235,7 @@ def handle_generate_audio_subtitles(
         full_summary = item.get('_full_summary', '')
         text_for_tts = original_title + ". " + full_summary # This will be the text for current item for summarization/TTS
         ai_generated_summary = None # Initialize ai_generated_summary
+        translated_text_for_json = None # Initialize for storing full translated text
 
         # Parse target language choice for processing (translation and summarization)
         target_lang_code_for_processing = None
@@ -264,10 +265,13 @@ def handle_generate_audio_subtitles(
             elif translation_result['translated_text'] is not None:
                 text_for_tts = translation_result['translated_text']
                 logger.info(f"Successfully translated item '{original_title}' to {target_lang_code_for_processing}.")
-            else:
-                logger.warning(f"Translation attempt for item '{original_title}' returned no text and no error. Proceeding with original text.")
+                translated_text_for_json = translation_result['translated_text'] # Capture full translated text
+            else: # Handles both error and (None, None) case
+                logger.warning(f"Translation attempt for item '{original_title}' returned no text or an error. Proceeding with original text for TTS/Summarization.")
+                # translated_text_for_json remains None
         else:
             logger.info(f"No target language selected for item '{original_title}', skipping translation.")
+            # translated_text_for_json remains None
 
         # Collect data for JSON export
         item_data_for_json = {
@@ -370,11 +374,20 @@ def handle_generate_audio_subtitles(
             if not output_links_markdown.strip().endswith("\n"):
                 output_links_markdown += "\n"
         
-        # Add ai_generated_summary to item_data_for_json with dynamic key
-        summary_key = f"ai_summary_{target_lang_code_for_processing}" if target_lang_code_for_processing else "ai_summary_source"
-        item_data_for_json[summary_key] = ai_generated_summary
+        # Add translated text and summarized text to item_data_for_json
+        if target_lang_code_for_processing:
+            # Save the full translated text (before summarization) under ai_summary_{lang_code}
+            item_data_for_json[f"ai_summary_{target_lang_code_for_processing}"] = translated_text_for_json
+        # else:
+            # If no target_lang_code_for_processing, no ai_summary_{lang_code} key is created for translated text.
+            # Or, if we want to explicitly state no translation for a specific language was done:
+            # if target_language_choice != "As Source (No Translation)" and target_lang_code_for_processing: # e.g. 'zh' was selected but parsing failed
+            #    item_data_for_json[f"ai_summary_{target_lang_code_for_processing}"] = None
         
-        consolidated_selected_news_data.append(item_data_for_json) # Append here after ai_summary is potentially updated
+        # Always save the output of the summarization step (or None if no summarization) under "ai_summary_source"
+        item_data_for_json["ai_summary_source"] = ai_generated_summary
+        
+        consolidated_selected_news_data.append(item_data_for_json)
 
         # Add the final text (original or summarized) for this item to the global list
         all_texts_for_global_processing.append(text_for_tts)
