@@ -13,6 +13,7 @@ import news_fetcher
 import summarizer
 import tts_generator
 import subtitle_generator
+import translator # Import the new translator module
 
 # --- Global State (Simplified for now) ---
 # Store fetched news items. A list of dictionaries.
@@ -65,7 +66,8 @@ env_vars_to_check = [
     "GEMINI_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_API_BASE_URL",
     "AZURE_TTS_API_KEY", "AZURE_TTS_REGION", 
     "GOOGLE_CLOUD_TTS_CREDENTIALS_PATH",
-    "MINIMAX_API_KEY", "MINIMAX_GROUP_ID"
+    "MINIMAX_API_KEY", "MINIMAX_GROUP_ID",
+    "TRANSLATION_API_KEY" # Added Translation API Key
 ]
 for var_name in env_vars_to_check:
     if os.getenv(var_name):
@@ -234,24 +236,37 @@ def handle_generate_audio_subtitles(
         text_for_tts = original_title + ". " + full_summary # This will be the text for current item for summarization/TTS
         ai_generated_summary = None # Initialize ai_generated_summary
 
-        # Parse target language choice
-        target_lang_code = None
+        # Parse target language choice for processing (translation and summarization)
+        target_lang_code_for_processing = None
         if target_language_choice and target_language_choice != "As Source (No Translation)":
             match = re.search(r'\((.*?)\)', target_language_choice)
             if match:
-                target_lang_code = match.group(1)
-                logger.info(f"Target language code selected: {target_lang_code}")
+                target_lang_code_for_processing = match.group(1)
+                logger.info(f"Target language code for processing selected: {target_lang_code_for_processing}")
             else:
                 logger.warning(f"Could not parse language code from: {target_language_choice}")
         
-        # Conceptual Translation Step
-        if target_lang_code:
-            # TODO: Implement actual translation call here using translator.py
-            logger.info(f"Conceptual translation: Text for item '{original_title}' would be translated to {target_lang_code} here.")
-            # Placeholder modification for now:
-            # text_for_tts = f"[Translated to {target_lang_code}] {text_for_tts}"
-            # For this task, we'll assume text_for_tts is now translated without actual content change.
-            # Subsequent steps (like summarization) will use this conceptually translated text.
+        # Actual Translation Step
+        if target_lang_code_for_processing:
+            logger.info(f"Attempting translation of item '{original_title}' to {target_lang_code_for_processing}...")
+            current_translation_api_key = os.getenv("TRANSLATION_API_KEY") # Using os.getenv for now
+            
+            translation_result = translator.translate_text(
+                text=text_for_tts,
+                target_lang_code=target_lang_code_for_processing,
+                source_lang_code="auto", # Or a fixed source like "en"
+                api_key=current_translation_api_key 
+            )
+            if translation_result['error']:
+                logger.error(f"Translation Error for item '{original_title}': {translation_result['error']}")
+                logger.warning(f"Proceeding with original text for item '{original_title}' due to translation error.")
+            elif translation_result['translated_text'] is not None:
+                text_for_tts = translation_result['translated_text']
+                logger.info(f"Successfully translated item '{original_title}' to {target_lang_code_for_processing}.")
+            else:
+                logger.warning(f"Translation attempt for item '{original_title}' returned no text and no error. Proceeding with original text.")
+        else:
+            logger.info(f"No target language selected for item '{original_title}', skipping translation.")
 
         # Collect data for JSON export
         item_data_for_json = {
@@ -305,15 +320,15 @@ def handle_generate_audio_subtitles(
         #     output_links_markdown += f"  - Error saving original text.\n"
 
         if summarizer_choice != "None" and text_for_tts.strip():
-            msg = f"  Attempting summarization with {summarizer_choice} for text (potentially translated to {target_lang_code if target_lang_code else 'source language'})..."
+            msg = f"  Attempting summarization with {summarizer_choice} for text (language: {target_lang_code_for_processing if target_lang_code_for_processing else 'source language'})..."
             logger.info(msg)
             log_messages.append(msg)
             summary_result = summarizer.summarize_text(
-                text_to_summarize=text_for_tts, # This text_for_tts is conceptually translated if a language was selected
+                text_to_summarize=text_for_tts, # This text_for_tts is now potentially translated
                 service=summarizer_choice, 
                 api_key=(gemini_api_key_cfg if summarizer_choice == "gemini" else openrouter_api_key_cfg if summarizer_choice == "openrouter" else None),
                 ollama_model=ollama_model_name, ollama_api_url=ollama_api_url_cfg,
-                target_language=target_lang_code # Pass target_lang_code to summarizer (optional, if summarizer supports it)
+                target_language=target_lang_code_for_processing # Pass the same lang code to summarizer
             )
             if summary_result['error']:
                 msg = f"  Summarization Error: {summary_result['error']}"
@@ -355,7 +370,7 @@ def handle_generate_audio_subtitles(
                 output_links_markdown += "\n"
         
         # Add ai_generated_summary to item_data_for_json with dynamic key
-        summary_key = f"ai_summary_{target_lang_code}" if target_lang_code else "ai_summary_source"
+        summary_key = f"ai_summary_{target_lang_code_for_processing}" if target_lang_code_for_processing else "ai_summary_source"
         item_data_for_json[summary_key] = ai_generated_summary
         
         consolidated_selected_news_data.append(item_data_for_json) # Append here after ai_summary is potentially updated
@@ -612,6 +627,16 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                 with gr.Column():
                     cfg_minimax_key = gr.Textbox(label="Minimax API Key (TTS)", type="password", lines=1, value=os.getenv("MINIMAX_API_KEY", ""))
                     cfg_minimax_group_id = gr.Textbox(label="Minimax Group ID (TTS)", lines=1, value=os.getenv("MINIMAX_GROUP_ID", ""))
+            with gr.Row(): # New row for Translation API Key
+                with gr.Column():
+                    cfg_translation_key = gr.Textbox(
+                        label="Translation API Key (e.g., for Google Translate)", 
+                        type="password", 
+                        lines=1, 
+                        value=os.getenv("TRANSLATION_API_KEY", "")
+                    )
+                with gr.Column(): # Empty column to maintain layout if needed, or add other settings
+                    pass
             
             gr.Markdown("API keys and other configurations are primarily managed via the `.env` file or environment variables. Changes made here are for the current session only unless your environment variables are updated externally.")
 
