@@ -230,6 +230,7 @@ def handle_generate_audio_subtitles(
         original_title = item.get('_original_title', 'Untitled')
         full_summary = item.get('_full_summary', '')
         text_for_tts = original_title + ". " + full_summary # This will be the text for current item for summarization/TTS
+        ai_generated_summary = None # Initialize ai_generated_summary
 
         # Collect data for JSON export
         item_data_for_json = {
@@ -237,9 +238,11 @@ def handle_generate_audio_subtitles(
             'original_title': original_title,
             'full_summary': full_summary,
             'source_url': item.get('source_url', 'N/A'),
-            'published_date': item.get('published_date', 'N/A')
+            'published_date': item.get('published_date', 'N/A'),
+            'ai_summary': ai_generated_summary # Will be updated after summarization
         }
-        consolidated_selected_news_data.append(item_data_for_json)
+        # This append will be moved down after ai_summary might be updated.
+        # consolidated_selected_news_data.append(item_data_for_json) 
 
         item_log_prefix = f"Processing Item: {original_title}"
         logger.info(item_log_prefix)
@@ -295,12 +298,21 @@ def handle_generate_audio_subtitles(
                 log_messages.append(msg)
             else:
                 summarized_text = summary_result['summary']
-                msg = f"  Summarization Successful. New text length: {len(summarized_text)}"
-                logger.info(msg)
-                log_messages.append(msg)
-                
-                # Save summarized content
-                summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_summarized_content.txt")
+                if summarized_text and summarized_text.strip(): # Check if summary is not empty
+                    ai_generated_summary = summarized_text # Update ai_generated_summary
+                    item_data_for_json['ai_summary'] = ai_generated_summary # Update in dict
+                    msg = f"  Summarization Successful. New text length: {len(summarized_text)}"
+                    logger.info(msg)
+                    log_messages.append(msg)
+                    
+                    # Save summarized content
+                    summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_summarized_content.txt")
+                else:
+                    msg = f"  Summarization resulted in empty text. Not using."
+                    logger.warning(msg)
+                    log_messages.append(msg)
+                    # ai_generated_summary remains None
+                    summarized_text = text_for_tts # Fallback to original if summary is empty
                 try:
                     with open(summarized_content_filepath, "w", encoding="utf-8") as f:
                         f.write(summarized_text)
@@ -318,7 +330,8 @@ def handle_generate_audio_subtitles(
             # Ensure a newline if only original text link was added and no summarized file link.
             if not output_links_markdown.strip().endswith("\n"):
                 output_links_markdown += "\n"
-
+        
+        consolidated_selected_news_data.append(item_data_for_json) # Append here after ai_summary is potentially updated
 
         # Add the final text (original or summarized) for this item to the global list
         all_texts_for_global_processing.append(text_for_tts)
