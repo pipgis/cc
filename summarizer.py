@@ -24,7 +24,11 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
     # Prefer /api/chat for more structured interaction, similar to OpenAI
     # Adjust prompt based on target_language
     if target_language == 'zh':
-        prompt = f"请用中文简明扼要地总结以下文本：\n\n{text_to_summarize}\n\n摘要："
+        prompt = (
+            f"请用中文简明扼要地总结以下文本。确保总结中所有的词语和表述都使用中文。"
+            f"必须直接返回纯粹的总结内容，不要包含任何前缀、标签、标题或任何其他解释性文字。\n\n"
+            f"需要总结的文本：\n{text_to_summarize}"
+        )
     else:
         prompt = f"Summarize the following text in a concise manner:\n\n{text_to_summarize}\n\nSummary:"
 
@@ -58,22 +62,9 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
             
             summary = processed_summary.strip()
 
-            # Post-processing for Chinese summaries
-            if target_language == 'zh':
-                english_prefixes_to_remove = [
-                    "Summary:", "summary:", "Here's a summary:", "here's a summary:", 
-                    "The summary is:", "the summary is:", "In summary,", "in summary,"
-                ]
-                temp_lower_summary = summary.lower()
-                for prefix in english_prefixes_to_remove:
-                    if temp_lower_summary.startswith(prefix.lower()):
-                        # Find the actual prefix in the original summary to preserve case for the rest
-                        original_prefix = summary[:len(prefix)]
-                        if original_prefix.lower() == prefix.lower():
-                            summary = summary[len(prefix):].lstrip(": ").lstrip() # Remove prefix and potential colon/space
-                            temp_lower_summary = summary.lower() # Update for next iteration if any
-                            logger.debug(f"Removed English prefix '{original_prefix}' from Chinese summary.")
-                            break # Assuming only one such prefix would appear
+            # Simplified cleaning: The explicit prefix stripping logic has been removed.
+            # The <think> block removal is done above, and a final .strip() is applied here.
+            # No language-specific prefix stripping is performed here anymore.
 
             logger.info(f"Ollama /api/chat summarization successful for model '{ollama_model}'.")
             return {'summary': summary, 'error': None}
@@ -90,21 +81,9 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
             
             summary = processed_summary.strip()
 
-            # Post-processing for Chinese summaries (duplicate for this path, refactor if preferred)
-            if target_language == 'zh':
-                english_prefixes_to_remove = [
-                    "Summary:", "summary:", "Here's a summary:", "here's a summary:",
-                    "The summary is:", "the summary is:", "In summary,", "in summary,"
-                ]
-                temp_lower_summary = summary.lower()
-                for prefix in english_prefixes_to_remove:
-                    if temp_lower_summary.startswith(prefix.lower()):
-                        original_prefix = summary[:len(prefix)]
-                        if original_prefix.lower() == prefix.lower():
-                            summary = summary[len(prefix):].lstrip(": ").lstrip()
-                            temp_lower_summary = summary.lower()
-                            logger.debug(f"Removed English prefix '{original_prefix}' from Chinese summary (generate-like response).")
-                            break
+            # Simplified cleaning: The explicit prefix stripping logic has been removed.
+            # The <think> block removal is done above, and a final .strip() is applied here.
+            # No language-specific prefix stripping is performed here anymore.
             
             logger.info(f"Ollama /api/chat (unexpectedly) returned /api/generate-like response for model '{ollama_model}'. Processed summary.")
             return {'summary': summary, 'error': None}
@@ -138,21 +117,9 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
                 
                 summary = processed_summary.strip()
 
-                # Post-processing for Chinese summaries for /api/generate path
-                if target_language == 'zh':
-                    english_prefixes_to_remove = [
-                        "Summary:", "summary:", "Here's a summary:", "here's a summary:",
-                        "The summary is:", "the summary is:", "In summary,", "in summary,"
-                    ]
-                    temp_lower_summary = summary.lower()
-                    for prefix in english_prefixes_to_remove:
-                        if temp_lower_summary.startswith(prefix.lower()):
-                            original_prefix = summary[:len(prefix)]
-                            if original_prefix.lower() == prefix.lower():
-                                summary = summary[len(prefix):].lstrip(": ").lstrip()
-                                temp_lower_summary = summary.lower()
-                                logger.debug(f"Removed English prefix '{original_prefix}' from Chinese summary (/api/generate).")
-                                break
+                # Simplified cleaning: The explicit prefix stripping logic has been removed.
+                # The <think> block removal is done above, and a final .strip() is applied here.
+                # No language-specific prefix stripping is performed here anymore.
                 
                 logger.info(f"Ollama /api/generate summarization successful for model '{ollama_model}'.")
                 return {'summary': summary, 'error': None}
