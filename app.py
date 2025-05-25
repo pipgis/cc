@@ -2,6 +2,7 @@ import gradio as gr
 import os
 import json
 import logging
+import re # Import re module
 from dotenv import load_dotenv
 from datetime import datetime
 import pandas as pd # For DataFrame
@@ -168,7 +169,8 @@ def handle_generate_audio_subtitles(
     tts_service, tts_voice_gender,
     max_chars_per_segment_cfg, # New parameter for max chars per segment
     azure_tts_key_cfg, azure_tts_region_cfg,
-    google_tts_path_cfg, minimax_tts_key_cfg, minimax_tts_group_id_cfg
+    google_tts_path_cfg, minimax_tts_key_cfg, minimax_tts_group_id_cfg,
+    target_language_choice # New parameter for target language
 ):
     """
     Generates audio and subtitles for selected news items.
@@ -232,14 +234,33 @@ def handle_generate_audio_subtitles(
         text_for_tts = original_title + ". " + full_summary # This will be the text for current item for summarization/TTS
         ai_generated_summary = None # Initialize ai_generated_summary
 
+        # Parse target language choice
+        target_lang_code = None
+        if target_language_choice and target_language_choice != "As Source (No Translation)":
+            match = re.search(r'\((.*?)\)', target_language_choice)
+            if match:
+                target_lang_code = match.group(1)
+                logger.info(f"Target language code selected: {target_lang_code}")
+            else:
+                logger.warning(f"Could not parse language code from: {target_language_choice}")
+        
+        # Conceptual Translation Step
+        if target_lang_code:
+            # TODO: Implement actual translation call here using translator.py
+            logger.info(f"Conceptual translation: Text for item '{original_title}' would be translated to {target_lang_code} here.")
+            # Placeholder modification for now:
+            # text_for_tts = f"[Translated to {target_lang_code}] {text_for_tts}"
+            # For this task, we'll assume text_for_tts is now translated without actual content change.
+            # Subsequent steps (like summarization) will use this conceptually translated text.
+
         # Collect data for JSON export
         item_data_for_json = {
             'id': item.get('id'),
             'original_title': original_title,
             'full_summary': full_summary,
             'source_url': item.get('source_url', 'N/A'),
-            'published_date': item.get('published_date', 'N/A'),
-            'ai_summary': ai_generated_summary # Will be updated after summarization
+            'published_date': item.get('published_date', 'N/A')
+            # ai_summary will be added dynamically below
         }
         # This append will be moved down after ai_summary might be updated.
         # consolidated_selected_news_data.append(item_data_for_json) 
@@ -284,13 +305,15 @@ def handle_generate_audio_subtitles(
         #     output_links_markdown += f"  - Error saving original text.\n"
 
         if summarizer_choice != "None" and text_for_tts.strip():
-            msg = f"  Attempting summarization with {summarizer_choice}..."
+            msg = f"  Attempting summarization with {summarizer_choice} for text (potentially translated to {target_lang_code if target_lang_code else 'source language'})..."
             logger.info(msg)
             log_messages.append(msg)
             summary_result = summarizer.summarize_text(
-                text_to_summarize=text_for_tts, service=summarizer_choice, # Use the original text_for_tts
+                text_to_summarize=text_for_tts, # This text_for_tts is conceptually translated if a language was selected
+                service=summarizer_choice, 
                 api_key=(gemini_api_key_cfg if summarizer_choice == "gemini" else openrouter_api_key_cfg if summarizer_choice == "openrouter" else None),
                 ollama_model=ollama_model_name, ollama_api_url=ollama_api_url_cfg,
+                target_language=target_lang_code # Pass target_lang_code to summarizer (optional, if summarizer supports it)
             )
             if summary_result['error']:
                 msg = f"  Summarization Error: {summary_result['error']}"
@@ -300,36 +323,40 @@ def handle_generate_audio_subtitles(
                 summarized_text = summary_result['summary']
                 if summarized_text and summarized_text.strip(): # Check if summary is not empty
                     ai_generated_summary = summarized_text # Update ai_generated_summary
-                    item_data_for_json['ai_summary'] = ai_generated_summary # Update in dict
+                    # item_data_for_json['ai_summary'] = ai_generated_summary # Old static update
                     msg = f"  Summarization Successful. New text length: {len(summarized_text)}"
                     logger.info(msg)
                     log_messages.append(msg)
                     
-                    # Save summarized content
-                    summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_summarized_content.txt")
+                    # The following block for saving summarized content to a file is now removed/commented out.
+                    # summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_summarized_content.txt")
                 else:
                     msg = f"  Summarization resulted in empty text. Not using."
                     logger.warning(msg)
                     log_messages.append(msg)
                     # ai_generated_summary remains None
                     summarized_text = text_for_tts # Fallback to original if summary is empty
-                try:
-                    with open(summarized_content_filepath, "w", encoding="utf-8") as f:
-                        f.write(summarized_text)
-                    logger.info(f"Saved summarized content for '{original_title}' to {summarized_content_filepath}")
-                    log_messages.append(f"  Saved summarized content to: {summarized_content_filepath}")
-                    summarized_text_link = f"[{os.path.basename(summarized_content_filepath)}](./file={summarized_content_filepath})"
-                    output_links_markdown += f"  - Summarized Text: {summarized_text_link}\n"
-                except Exception as e:
-                    logger.error(f"Failed to save summarized content for '{original_title}' to {summarized_content_filepath}: {e}", exc_info=True)
-                    log_messages.append(f"  Error saving summarized content: {e}")
-                    output_links_markdown += f"  - Error saving summarized text.\n"
+                # try:
+                #     with open(summarized_content_filepath, "w", encoding="utf-8") as f:
+                #         f.write(summarized_text)
+                #     logger.info(f"Saved summarized content for '{original_title}' to {summarized_content_filepath}")
+                #     log_messages.append(f"  Saved summarized content to: {summarized_content_filepath}")
+                #     summarized_text_link = f"[{os.path.basename(summarized_content_filepath)}](./file={summarized_content_filepath})"
+                #     output_links_markdown += f"  - Summarized Text: {summarized_text_link}\n"
+                # except Exception as e:
+                #     logger.error(f"Failed to save summarized content for '{original_title}' to {summarized_content_filepath}: {e}", exc_info=True)
+                #     log_messages.append(f"  Error saving summarized content: {e}")
+                #     output_links_markdown += f"  - Error saving summarized text.\n"
                 
                 text_for_tts = summarized_text # Update text_for_tts to the summarized version for this item
         else: # No summarization or summarization failed
             # Ensure a newline if only original text link was added and no summarized file link.
             if not output_links_markdown.strip().endswith("\n"):
                 output_links_markdown += "\n"
+        
+        # Add ai_generated_summary to item_data_for_json with dynamic key
+        summary_key = f"ai_summary_{target_lang_code}" if target_lang_code else "ai_summary_source"
+        item_data_for_json[summary_key] = ai_generated_summary
         
         consolidated_selected_news_data.append(item_data_for_json) # Append here after ai_summary is potentially updated
 
@@ -395,12 +422,43 @@ def handle_generate_audio_subtitles(
     # Prepare API key arguments for tts_generator.generate_audio
     azure_api_key_to_pass = azure_tts_key_cfg if tts_service == "azure" else None
     # Other API keys (Google, Minimax) are passed directly to tts_generator
+
+    # Determine language code for TTS
+    # target_lang_code is derived per item, but TTS is global.
+    # For simplicity, we'll use the target_lang_code of the *first* item if multiple items are processed
+    # and a translation was requested. Otherwise, default to "en".
+    # A more robust solution might involve per-item TTS or ensuring all items have same target lang for combined TTS.
     
+    # Let's re-evaluate: target_lang_code is determined *inside* the loop for each item.
+    # The combined_text_for_audio is built from text_for_tts which might be translated.
+    # So, the language of combined_text_for_audio should match the target_lang_code if translation happened.
+    # We need the target_lang_code that was applied (if any) to the text before summarization & TTS.
+    # The current `target_lang_code` variable is from the last item in the loop.
+    # This is a slight design issue: if items have different target languages, what should global TTS language be?
+    # For now, let's assume the `target_language_choice` applies to all selected items uniformly.
+    # So the `target_lang_code` derived from `target_language_choice` (outside the loop or from the first item) is what we need.
+    
+    # Re-parsing target_language_choice for global TTS language context.
+    # This assumes target_language_choice is consistent for the batch.
+    global_tts_lang_code = None
+    if target_language_choice and target_language_choice != "As Source (No Translation)":
+        match = re.search(r'\((.*?)\)', target_language_choice)
+        if match:
+            global_tts_lang_code = match.group(1)
+    
+    if global_tts_lang_code:
+        language_code_for_tts = global_tts_lang_code
+        logger.info(f"Global TTS will use target language: {language_code_for_tts} (from UI selection).")
+    else:
+        language_code_for_tts = "en" # Default to English if no translation was specified
+        logger.info(f"Global TTS will use default language: {language_code_for_tts} (as 'As Source' or no valid language parsed).")
+
     global_tts_result = tts_generator.generate_audio(
         text_to_speak=combined_text_for_audio,
         output_filename=global_mp3_filename,
         service=tts_service,
         voice_gender=tts_voice_gender,
+        language_code=language_code_for_tts, # Pass the determined language code
         api_key=azure_api_key_to_pass, # Used by Azure
         azure_region=azure_tts_region_cfg,
         google_credentials_path=google_tts_path_cfg,
@@ -600,6 +658,13 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             gen_summarizer_choice.change(toggle_ollama_model_visibility, inputs=[gen_summarizer_choice], outputs=[gen_ollama_model_name])
 
             with gr.Row():
+                gen_target_language = gr.Dropdown(
+                    label="Select Target Language",
+                    choices=["As Source (No Translation)", "English (en)", "Chinese (zh)", "Spanish (es)", "French (fr)"],
+                    value="As Source (No Translation)"
+                )
+
+            with gr.Row():
                 gen_tts_service = gr.Dropdown(label="Select TTS Service", choices=["edge_tts", "azure", "google", "minimax"], value="edge_tts")
                 gen_tts_voice_gender = gr.Dropdown(label="Select Voice Gender (for selected TTS)", choices=["female", "male"], value="female")
             
@@ -683,6 +748,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                     gen_news_topic,
                     gen_summarizer_choice, gen_ollama_model_name, cfg_ollama_url, # Summarizer
                     cfg_gemini_key, cfg_openrouter_key,                         # Summarizer APIs
+                    gen_target_language,                                        # New Language choice
                     gen_tts_service, gen_tts_voice_gender,                      # TTS
                     gen_max_chars_segment,                                      # New Subtitle Option
                     cfg_azure_tts_key, cfg_azure_tts_region,                    # TTS APIs

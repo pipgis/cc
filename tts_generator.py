@@ -24,22 +24,62 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# --- Voice Mappings ---
+EDGE_TTS_VOICE_MAPPING = {
+    "en": {"female": "en-US-AriaNeural", "male": "en-US-GuyNeural"},
+    "zh": {"female": "zh-CN-XiaoxiaoNeural", "male": "zh-CN-YunxiNeural"},
+    "es": {"female": "es-ES-ElviraNeural", "male": "es-ES-AlvaroNeural"},
+    "fr": {"female": "fr-FR-DeniseNeural", "male": "fr-FR-HenriNeural"},
+}
+
+AZURE_TTS_VOICE_MAPPING = {
+    "en": {"female": "en-US-AriaNeural", "male": "en-US-GuyNeural"},
+    "zh": {"female": "zh-CN-XiaoxiaoNeural", "male": "zh-CN-YunxiNeural"},
+    "es": {"female": "es-ES-ElviraNeural", "male": "es-ES-AlvaroNeural"},
+    "fr": {"female": "fr-FR-DeniseNeural", "male": "fr-FR-HenriNeural"},
+}
+
+GOOGLE_TTS_VOICE_MAPPING = {
+    # Google uses language_code and gender directly, but specific voice names can be mapped if needed.
+    # Using standard voices for broader compatibility and potentially lower cost.
+    # Format: {lang_code: {gender: voice_name}}
+    "en": {"female": "en-US-Standard-C", "male": "en-US-Standard-D"}, # Example voices
+    "zh": {"female": "cmn-CN-Standard-A", "male": "cmn-CN-Standard-B"}, # For Mandarin Chinese
+    "es": {"female": "es-ES-Standard-A", "male": "es-ES-Standard-B"},
+    "fr": {"female": "fr-FR-Standard-A", "male": "fr-FR-Standard-B"},
+}
+
+MINIMAX_TTS_VOICE_MAPPING = {
+    # Minimax voice_id seems to imply language and gender.
+    # This mapping needs to be based on available Minimax voice_ids.
+    # Placeholder - update with actual valid voice_ids from Minimax documentation.
+    "en": {"female": "female_en_voice", "male": "male_en_voice"},
+    "zh": {"female": "female_zh_voice", "male": "male_zh_voice"}, # Example: "female-zh-XiaoMei"
+    # Defaulting to a known good Minimax voice if specific mapping isn't available,
+    # but this might not match desired language/gender.
+    # The example provided "male-qn-qingse" which seems to be Chinese Male.
+    # For now, let's use the example from the original code if no other mapping is found for Minimax
+    # This needs careful review based on Minimax's actual voice list.
+    # For this exercise, let's assume "male-qn-qingse" is a general fallback or a specific Chinese male voice.
+    # We will prioritize mapped voices first.
+}
+
+
 # --- Helper Functions for Each Service ---
 
-async def _generate_edge_tts_async(text_to_speak: str, output_filename: str, voice_gender: str = 'female') -> dict:
+async def _generate_edge_tts_async(text_to_speak: str, output_filename: str, language_code: str, voice_gender: str = 'female') -> dict:
     """
     Asynchronous helper for EdgeTTS generation.
     """
     if not edge_tts:
         return {'success': False, 'error': "edge_tts library is not installed. Please install it using: pip install edge-tts"}
 
-    # Voice selection for Chinese
-    # Full list: https://docs.microsoft.com/en-us/azure/cognitive-services/speech-service/language-support?tabs=stt-tts#text-to-speech
-    if voice_gender.lower() == 'male':
-        voice = "zh-CN-YunxiNeural"  # Male
-    else:
-        voice = "zh-CN-XiaoxiaoNeural" # Female (default)
+    voice = EDGE_TTS_VOICE_MAPPING.get(language_code, {}).get(voice_gender.lower())
+    if not voice:
+        logger.error(f"EdgeTTS: Unsupported language_code '{language_code}' or voice_gender '{voice_gender}'.")
+        return {'success': False, 'error': f"EdgeTTS: Unsupported language_code '{language_code}' or voice_gender '{voice_gender}'."}
     
+    logger.info(f"EdgeTTS: Using voice '{voice}' for language '{language_code}' and gender '{voice_gender}'.")
     try:
         communicate = edge_tts.Communicate(text_to_speak, voice)
         await communicate.save(output_filename)
@@ -67,7 +107,30 @@ def _generate_edge_tts(text_to_speak: str, output_filename: str, voice_gender: s
         return {'success': False, 'error': f"EdgeTTS asyncio execution failed: {e}"}
 
 
-def _generate_azure_tts(text_to_speak: str, output_filename: str, voice_gender: str = 'female', 
+def _generate_edge_tts(text_to_speak: str, output_filename: str, language_code: str, voice_gender: str = 'female') -> dict:
+    """
+    Synchronous wrapper for EdgeTTS generation.
+    """
+    try:
+        # Pass language_code and voice_gender to the async helper
+        result = asyncio.run(_generate_edge_tts_async(text_to_speak, output_filename, language_code, voice_gender))
+        if not result['success']: # If async helper already reported failure, propagate it
+            return result
+            
+        # Check if file was created and has size, as edge_tts.save might not raise error for all failures
+        if os.path.exists(output_filename) and os.path.getsize(output_filename) > 0:
+            # Already logged success in async version
+            return {'success': True, 'error': None}
+        else:
+            logger.error(f"EdgeTTS file not created or empty for {output_filename}, check text or voice.")
+            # If the async call reported success but file is missing/empty, this is a new error condition.
+            return {'success': False, 'error': "EdgeTTS file not created or empty, check text or voice."}
+    except Exception as e:
+        logger.error(f"EdgeTTS asyncio execution failed for {output_filename}", exc_info=True)
+        return {'success': False, 'error': f"EdgeTTS asyncio execution failed: {e}"}
+
+
+def _generate_azure_tts(text_to_speak: str, output_filename: str, language_code: str, voice_gender: str = 'female', 
                         api_key: str = None, azure_region: str = None) -> dict:
     """
     Generates speech using Microsoft Azure Cognitive Services TTS.
@@ -77,14 +140,16 @@ def _generate_azure_tts(text_to_speak: str, output_filename: str, voice_gender: 
     if not api_key or not azure_region:
         return {'success': False, 'error': "Azure API Key and Region are required."}
 
+    voice_name = AZURE_TTS_VOICE_MAPPING.get(language_code, {}).get(voice_gender.lower())
+    if not voice_name:
+        logger.error(f"AzureTTS: Unsupported language_code '{language_code}' or voice_gender '{voice_gender}'.")
+        return {'success': False, 'error': f"AzureTTS: Unsupported language_code '{language_code}' or voice_gender '{voice_gender}'."}
+
     try:
         speech_config = SpeechConfig(subscription=api_key, region=azure_region)
-        
-        # Voice selection for Chinese
-        if voice_gender.lower() == 'male':
-            speech_config.speech_synthesis_voice_name = "zh-CN-YunxiNeural"
-        else:
-            speech_config.speech_synthesis_voice_name = "zh-CN-XiaoxiaoNeural" # Female (default)
+        speech_config.speech_synthesis_language = language_code # Set language
+        speech_config.speech_synthesis_voice_name = voice_name  # Set voice
+        logger.info(f"AzureTTS: Using voice '{voice_name}' for language '{language_code}' and gender '{voice_gender}'.")
 
         # Set audio output format to MP3
         speech_config.set_speech_synthesis_output_format(speech_config.speech_synthesis_output_format.Audio16Khz32KBitRateMonoMp3)
@@ -113,7 +178,7 @@ def _generate_azure_tts(text_to_speak: str, output_filename: str, voice_gender: 
         return {'success': False, 'error': f"Azure TTS generation failed: {e}"}
 
 
-def _generate_google_tts(text_to_speak: str, output_filename: str, voice_gender: str = 'female', 
+def _generate_google_tts(text_to_speak: str, output_filename: str, language_code: str, voice_gender: str = 'female', 
                          google_credentials_path: str = None) -> dict:
     """
     Generates speech using Google Cloud Text-to-Speech.
@@ -121,36 +186,30 @@ def _generate_google_tts(text_to_speak: str, output_filename: str, voice_gender:
     if not texttospeech:
         return {'success': False, 'error': "google-cloud-texttospeech library not installed. Please install it."}
 
+    voice_name = GOOGLE_TTS_VOICE_MAPPING.get(language_code, {}).get(voice_gender.lower())
+    if not voice_name:
+        # Google can often select a voice if only language_code and gender are provided,
+        # but for consistency and control, we use a mapping.
+        logger.error(f"GoogleTTS: Unsupported language_code '{language_code}' or voice_gender '{voice_gender}' in mapping.")
+        return {'success': False, 'error': f"GoogleTTS: Unsupported language_code '{language_code}' or voice_gender '{voice_gender}' in mapping."}
+
     try:
-        # If credentials path is provided, use it. Otherwise, client tries ADC.
         if google_credentials_path:
             client = texttospeech.TextToSpeechClient(credentials_path=google_credentials_path)
         else:
-            # This will work if GOOGLE_APPLICATION_CREDENTIALS env var is set,
-            # or if running on GCP with a service account.
-            client = texttospeech.TextToSpeechClient() 
+            client = texttospeech.TextToSpeechClient()
             logger.info("Google TTS: Attempting to use Application Default Credentials.")
 
-
         input_text = texttospeech.SynthesisInput(text=text_to_speak)
+        
+        ssml_gender_value = texttospeech.SsmlVoiceGender.MALE if voice_gender.lower() == 'male' else texttospeech.SsmlVoiceGender.FEMALE
 
-        # Voice selection for Chinese (Mandarin)
-        # Full list: https://cloud.google.com/text-to-speech/docs/voices
-        if voice_gender.lower() == 'male':
-            # Using Standard voices as Wavenet might be more expensive / require more setup
-            # cmn-CN-Wavenet-B / cmn-CN-Wavenet-D are male Wavenet
-            # cmn-CN-Standard-B / cmn-CN-Standard-D are male Standard
-            voice_name = "cmn-CN-Standard-B" 
-        else:
-            # cmn-CN-Wavenet-A / cmn-CN-Wavenet-C are female Wavenet
-            # cmn-CN-Standard-A / cmn-CN-Standard-C are female Standard
-            voice_name = "cmn-CN-Standard-A" # Female (default)
-
-        voice = texttospeech.VoiceSelectionParams(
-            language_code="cmn-CN", # Mandarin Chinese
-            name=voice_name
-            # ssml_gender=texttospeech.SsmlVoiceGender.MALE if voice_gender.lower() == 'male' else texttospeech.SsmlVoiceGender.FEMALE
+        voice_params = texttospeech.VoiceSelectionParams(
+            language_code=language_code,  # Set language
+            name=voice_name,              # Set specific voice name from mapping
+            ssml_gender=ssml_gender_value # Set gender
         )
+        logger.info(f"GoogleTTS: Using voice '{voice_name}' for language '{language_code}' and gender '{voice_gender}'.")
 
         audio_config = texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.MP3
@@ -170,22 +229,38 @@ def _generate_google_tts(text_to_speak: str, output_filename: str, voice_gender:
         return {'success': False, 'error': f"Google TTS generation failed: {e}"}
 
 
-def _generate_minimax_tts(text_to_speak: str, output_filename: str, voice_gender: str = 'female',
-                          minimax_api_key: str = None, minimax_group_id: str = None, minimax_voice_id: str = None) -> dict:
+def _generate_minimax_tts(text_to_speak: str, output_filename: str, language_code: str, voice_gender: str = 'female',
+                          minimax_api_key: str = None, minimax_group_id: str = None, minimax_voice_id_param: str = None) -> dict: # Renamed minimax_voice_id to avoid conflict
     """
-    Placeholder for Minimax TTS generation.
-    Actual implementation depends on Minimax API details.
+    Generates speech using Minimax TTS.
     """
-    if not minimax_api_key or not minimax_group_id: # Assuming these are essential
-        return {'success': False, 'error': "Minimax API Key and Group ID are required."}
-
-    # This is a hypothetical structure. Replace with actual API endpoint and payload.
-    logger.info(f"Attempting Minimax TTS (streaming) for text: \"{text_to_speak[:30]}...\" to file: {output_filename}")
-    
     if not minimax_api_key or not minimax_group_id:
-        logger.error("Minimax API Key or Group ID not provided.")
         return {'success': False, 'error': "Minimax API Key and Group ID are required."}
 
+    selected_voice_id = MINIMAX_TTS_VOICE_MAPPING.get(language_code, {}).get(voice_gender.lower())
+    
+    # Fallback logic for Minimax voice_id if not found in mapping
+    if not selected_voice_id:
+        if language_code == "zh" and voice_gender.lower() == "male": # Specific known example
+            selected_voice_id = "male-qn-qingse" 
+            logger.warning(f"MinimaxTTS: Voice for lang '{language_code}', gender '{voice_gender}' not in map. Using default '{selected_voice_id}'.")
+        else: # General fallback if no specific default known for the combo
+             # Using a known female Chinese voice as a general fallback if no other mapping found.
+             # This part might need adjustment based on available Minimax voices and desired default behavior.
+            selected_voice_id = "female-shaonv" 
+            logger.warning(f"MinimaxTTS: Voice for lang '{language_code}', gender '{voice_gender}' not in map. Using general fallback '{selected_voice_id}'. Update mapping for better results.")
+            # If minimax_voice_id_param was provided and no mapping, could use that as a last resort, but mappings are preferred.
+            # if minimax_voice_id_param:
+            #     selected_voice_id = minimax_voice_id_param
+            #     logger.warning(f"MinimaxTTS: Using provided minimax_voice_id_param '{selected_voice_id}' as fallback.")
+
+
+    if not selected_voice_id: # If still no voice_id after fallbacks
+        logger.error(f"MinimaxTTS: No suitable voice_id found for language_code '{language_code}' and voice_gender '{voice_gender}'.")
+        return {'success': False, 'error': f"MinimaxTTS: No voice_id for lang '{language_code}', gender '{voice_gender}'."}
+
+    logger.info(f"MinimaxTTS: Using voice_id '{selected_voice_id}' for lang '{language_code}', gender '{voice_gender}'. Text: \"{text_to_speak[:30]}...\"")
+    
     url = f"https://api.minimax.chat/v1/t2a_v2?GroupId={minimax_group_id}"
     headers = {
         'accept': 'application/json, text/plain, */*',
@@ -194,11 +269,11 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, voice_gender
     }
     
     body_payload = {
-        "model": "speech-02-turbo",
+        "model": "speech-02-turbo", # Defaulting to speech-02-turbo as per previous example, may need adjustment
         "text": text_to_speak,
-        "stream": True,
+        "stream": True, # Assuming stream is preferred
         "voice_setting": {
-            "voice_id": "male-qn-qingse", # Default from new example, ignoring voice_gender and minimax_voice_id params
+            "voice_id": selected_voice_id, # Use the mapped voice_id
             "speed": 1.0,
             "vol": 1.0,
             "pitch": 0
@@ -272,13 +347,15 @@ def _generate_minimax_tts(text_to_speak: str, output_filename: str, voice_gender
 # --- Main Dispatch Function ---
 
 def generate_audio(text_to_speak: str, output_filename: str, service: str, 
-                   voice_gender: str = 'female', api_key: str = None, 
-                   azure_region: str = None, google_credentials_path: str = None,
+                   voice_gender: str = 'female', language_code: str = "en", # Added language_code with default "en"
+                   api_key: str = None, azure_region: str = None, 
+                   google_credentials_path: str = None,
                    minimax_api_key: str = None, minimax_group_id: str = None, 
-                   minimax_voice_id: str = None) -> dict:
+                   minimax_voice_id: str = None) -> dict: # minimax_voice_id is original param, might be deprecated by mapping
     """
     Generates audio using the specified TTS service.
     Ensures the output directory exists.
+    The `language_code` parameter determines the language of the speech.
     """
     if not text_to_speak or not text_to_speak.strip():
         return {'success': False, 'error': "Input text is empty or whitespace."}
@@ -294,16 +371,24 @@ def generate_audio(text_to_speak: str, output_filename: str, service: str,
         logger.error(f"Failed to create output directory for {output_filename}", exc_info=True)
         return {'success': False, 'error': f"Failed to create output directory for {output_filename}: {e}"}
 
-    logger.info(f"Generating audio for text: \"{text_to_speak[:30]}...\" using service: {service} to file: {output_filename}")
-    service = service.lower()
-    if service == "edge_tts":
-        return _generate_edge_tts(text_to_speak, output_filename, voice_gender)
-    elif service == "azure":
-        return _generate_azure_tts(text_to_speak, output_filename, voice_gender, api_key, azure_region)
-    elif service == "google":
-        return _generate_google_tts(text_to_speak, output_filename, voice_gender, google_credentials_path)
-    elif service == "minimax":
-        return _generate_minimax_tts(text_to_speak, output_filename, voice_gender, 
+    logger.info(f"Generating audio for text: \"{text_to_speak[:30]}...\" using service: {service}, lang: {language_code} to file: {output_filename}")
+    service_lower = service.lower()
+
+    # Validate language_code (basic check, specific checks within helpers)
+    if not language_code or not isinstance(language_code, str) or len(language_code) < 2:
+        logger.error(f"Invalid language_code provided: {language_code}. Must be a string like 'en', 'zh'.")
+        return {'success': False, 'error': f"Invalid language_code: {language_code}"}
+        
+    if service_lower == "edge_tts":
+        return _generate_edge_tts(text_to_speak, output_filename, language_code, voice_gender)
+    elif service_lower == "azure":
+        return _generate_azure_tts(text_to_speak, output_filename, language_code, voice_gender, api_key, azure_region)
+    elif service_lower == "google":
+        return _generate_google_tts(text_to_speak, output_filename, language_code, voice_gender, google_credentials_path)
+    elif service_lower == "minimax":
+        # Pass language_code, voice_gender, and other minimax params.
+        # minimax_voice_id is the original direct param, which might be superseded by mapping logic.
+        return _generate_minimax_tts(text_to_speak, output_filename, language_code, voice_gender,
                                      minimax_api_key, minimax_group_id, minimax_voice_id)
     else:
         logger.error(f"Unsupported TTS service requested: {service}")
@@ -321,69 +406,82 @@ if __name__ == '__main__':
     logger.info(f"Created output directory: {os.path.abspath(output_dir)}")
 
     logger.info("\n--- Testing EdgeTTS ---")
-    if edge_tts:
-        edge_output_file_female = os.path.join(output_dir, "edge_tts_female_test.mp3")
-        edge_result_female = generate_audio(sample_chinese_text, edge_output_file_female, "edge_tts", voice_gender="female")
-        logger.info(f"EdgeTTS (Female) Result: {edge_result_female}")
-        if edge_result_female['success']:
-            logger.info(f"  Output: {os.path.abspath(edge_output_file_female)}")
+    test_langs = {"en": "Hello, this is a test.", "zh": "你好，这是一个测试语音。", "es": "Hola, esta es una prueba de voz.", "fr": "Bonjour, ceci est un test vocal."}
 
-        edge_output_file_male = os.path.join(output_dir, "edge_tts_male_test.mp3")
-        edge_result_male = generate_audio(sample_chinese_text, edge_output_file_male, "edge_tts", voice_gender="male")
-        logger.info(f"EdgeTTS (Male) Result: {edge_result_male}")
-        if edge_result_male['success']:
-            logger.info(f"  Output: {os.path.abspath(edge_output_file_male)}")
+    if edge_tts:
+        for lang, text in test_langs.items():
+            edge_output_file_female = os.path.join(output_dir, f"edge_tts_female_{lang}_test.mp3")
+            edge_result_female = generate_audio(text, edge_output_file_female, "edge_tts", voice_gender="female", language_code=lang)
+            logger.info(f"EdgeTTS (Female, {lang}) Result: {edge_result_female}")
+            if edge_result_female['success']:
+                logger.info(f"  Output: {os.path.abspath(edge_output_file_female)}")
     else:
         logger.warning("EdgeTTS library not found. Skipping EdgeTTS tests. Install with: pip install edge-tts")
     
-    logger.info("\n--- Testing Azure TTS (Placeholder) ---")
-    azure_api_key_test = os.environ.get("AZURE_SPEECH_KEY") or "YOUR_AZURE_SPEECH_KEY" 
-    azure_region_test = os.environ.get("AZURE_SPEECH_REGION") or "YOUR_AZURE_REGION"
+    logger.info("\n--- Testing Azure TTS ---")
+    azure_api_key_test = os.environ.get("AZURE_SPEECH_KEY") 
+    azure_region_test = os.environ.get("AZURE_SPEECH_REGION")
 
     if not SpeechConfig:
-        logger.warning("azure-cognitiveservices-speech library not found. Skipping Azure TTS tests. Install with: pip install azure-cognitiveservices-speech")
-    elif azure_api_key_test == "YOUR_AZURE_SPEECH_KEY" or azure_region_test == "YOUR_AZURE_REGION":
-        logger.warning(f"Azure credentials not set (use env vars AZURE_SPEECH_KEY, AZURE_SPEECH_REGION or edit script). Skipping.")
+        logger.warning("azure-cognitiveservices-speech library not found. Skipping Azure TTS tests.")
+    elif not azure_api_key_test or not azure_region_test:
+        logger.warning(f"Azure credentials not set (AZURE_SPEECH_KEY, AZURE_SPEECH_REGION). Skipping.")
     else:
-        logger.info(f"Attempting Azure TTS with key: '...{azure_api_key_test[-4:]}' and region: '{azure_region_test}'")
-        azure_output_file = os.path.join(output_dir, "azure_tts_female_test.mp3")
-        azure_result = generate_audio(sample_chinese_text, azure_output_file, "azure", 
-                                      voice_gender="female", api_key=azure_api_key_test, azure_region=azure_region_test)
-        logger.info(f"AzureTTS (Female) Result: {azure_result}")
-        if azure_result['success']:
-            logger.info(f"  Output: {os.path.abspath(azure_output_file)}")
+        for lang, text in test_langs.items():
+            azure_output_file = os.path.join(output_dir, f"azure_tts_female_{lang}_test.mp3")
+            azure_result = generate_audio(text, azure_output_file, "azure", 
+                                          voice_gender="female", language_code=lang, 
+                                          api_key=azure_api_key_test, azure_region=azure_region_test)
+            logger.info(f"AzureTTS (Female, {lang}) Result: {azure_result}")
+            if azure_result['success']:
+                logger.info(f"  Output: {os.path.abspath(azure_output_file)}")
 
-    logger.info("\n--- Testing Google Cloud TTS (Placeholder) ---")
-    google_creds_path_test = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") 
+    logger.info("\n--- Testing Google Cloud TTS ---")
+    google_creds_path_test = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
 
     if not texttospeech:
-        logger.warning("google-cloud-texttospeech library not found. Skipping Google TTS tests. Install with: pip install google-cloud-texttospeech")
-    elif not google_creds_path_test:
-        logger.warning("GOOGLE_APPLICATION_CREDENTIALS environment variable not set. Skipping Google TTS test.")
-        logger.warning("Alternatively, ensure you are authenticated for ADC if running on GCP or with gcloud CLI.")
+        logger.warning("google-cloud-texttospeech library not found. Skipping Google TTS tests.")
+    elif not google_creds_path_test: # Assuming ADC might not be set up for direct test runs easily
+        logger.warning("GOOGLE_APPLICATION_CREDENTIALS not set. Skipping Google TTS test.")
     else:
-        logger.info(f"Attempting Google TTS with credentials from: '{google_creds_path_test}'")
-        google_output_file = os.path.join(output_dir, "google_tts_female_test.mp3")
-        google_result = generate_audio(sample_chinese_text, google_output_file, "google", 
-                                       voice_gender="female", google_credentials_path=google_creds_path_test)
-        logger.info(f"GoogleTTS (Female) Result: {google_result}")
-        if google_result['success']:
-            logger.info(f"  Output: {os.path.abspath(google_output_file)}")
+        for lang, text in test_langs.items():
+            google_output_file = os.path.join(output_dir, f"google_tts_female_{lang}_test.mp3")
+            google_result = generate_audio(text, google_output_file, "google", 
+                                           voice_gender="female", language_code=lang, 
+                                           google_credentials_path=google_creds_path_test)
+            logger.info(f"GoogleTTS (Female, {lang}) Result: {google_result}")
+            if google_result['success']:
+                logger.info(f"  Output: {os.path.abspath(google_output_file)}")
 
-    logger.info("\n--- Testing Minimax TTS (Placeholder) ---")
-    minimax_api_key_test = os.environ.get("MINIMAX_API_KEY") or "YOUR_MINIMAX_API_KEY"
-    minimax_group_id_test = os.environ.get("MINIMAX_GROUP_ID") or "YOUR_MINIMAX_GROUP_ID"
+    logger.info("\n--- Testing Minimax TTS ---")
+    minimax_api_key_test = os.environ.get("MINIMAX_API_KEY")
+    minimax_group_id_test = os.environ.get("MINIMAX_GROUP_ID")
 
-    if minimax_api_key_test == "YOUR_MINIMAX_API_KEY" or minimax_group_id_test == "YOUR_MINIMAX_GROUP_ID":
-        logger.warning("Minimax credentials not set (use env vars MINIMAX_API_KEY, MINIMAX_GROUP_ID or edit script). Skipping.")
+    if not minimax_api_key_test or not minimax_group_id_test:
+        logger.warning("Minimax credentials not set (MINIMAX_API_KEY, MINIMAX_GROUP_ID). Skipping.")
     else:
-        logger.info(f"Attempting Minimax TTS with API key '...{minimax_api_key_test[-4:]}' and Group ID '{minimax_group_id_test}'")
-        minimax_output_file = os.path.join(output_dir, "minimax_tts_female_test.mp3")
-        minimax_result = generate_audio(sample_chinese_text, minimax_output_file, "minimax",
-                                        voice_gender="female", 
+        # Example for Chinese, assuming Minimax has good Chinese voices by default or via mapping
+        lang_zh, text_zh = "zh", test_langs["zh"]
+        minimax_output_file_zh = os.path.join(output_dir, f"minimax_tts_female_{lang_zh}_test.mp3")
+        minimax_result_zh = generate_audio(text_zh, minimax_output_file_zh, "minimax",
+                                        voice_gender="female", language_code=lang_zh, # Testing Chinese
                                         minimax_api_key=minimax_api_key_test, 
                                         minimax_group_id=minimax_group_id_test)
-        logger.info(f"MinimaxTTS (Female) Result: {minimax_result}")
+        logger.info(f"MinimaxTTS (Female, {lang_zh}) Result: {minimax_result_zh}")
+        if minimax_result_zh['success']:
+             logger.info(f"  Output: {os.path.abspath(minimax_output_file_zh)}")
+        
+        # Example for English
+        lang_en, text_en = "en", test_langs["en"]
+        minimax_output_file_en = os.path.join(output_dir, f"minimax_tts_female_{lang_en}_test.mp3")
+        minimax_result_en = generate_audio(text_en, minimax_output_file_en, "minimax",
+                                        voice_gender="female", language_code=lang_en, # Testing English
+                                        minimax_api_key=minimax_api_key_test, 
+                                        minimax_group_id=minimax_group_id_test)
+        logger.info(f"MinimaxTTS (Female, {lang_en}) Result: {minimax_result_en}")
+        if minimax_result_en['success']:
+             logger.info(f"  Output: {os.path.abspath(minimax_output_file_en)}")
+
 
     logger.info("\n--- Finished TTS Tests ---")
     logger.info(f"Please check the '{output_dir}' directory for any generated MP3 files.")
