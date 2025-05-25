@@ -48,7 +48,11 @@ def translate_text(text: str, target_lang_code: str, source_lang_code: str = "au
     lang_map = {"en": "English", "zh": "Chinese", "es": "Spanish", "fr": "French"}
     target_lang_display = lang_map.get(target_lang_code.lower(), f"'{target_lang_code}'")
 
-    prompt = f"Translate the following text from {source_lang_display} to {target_lang_display}. Output ONLY the translated text and nothing else:\n\n{text}\n\nTranslated text:"
+    prompt = (
+        f"Translate the following text from {source_lang_display} to {target_lang_display}. "
+        f"Respond with *only* the translated text, without any introductory phrases, labels, or any other additional content.\n\n"
+        f"Original text to translate:\n{text}"
+    )
 
     payload = {
         "model": ollama_model,
@@ -69,17 +73,43 @@ def translate_text(text: str, target_lang_code: str, source_lang_code: str = "au
         response.raise_for_status()
         response_data = response.json()
         
+        raw_text = None
         if 'message' in response_data and 'content' in response_data['message']:
-            translated_text = response_data['message']['content'].strip()
+            raw_text = response_data['message']['content']
             logger.info(f"Ollama /api/chat translation successful for model '{ollama_model}'.")
-            return {'translated_text': translated_text, 'error': None}
-        elif 'response' in response_data: # Fallback for generate-like response from chat endpoint
-            translated_text = response_data['response'].strip()
-            logger.info(f"Ollama /api/chat (generate-like response) translation successful for model '{ollama_model}'.")
-            return {'translated_text': translated_text, 'error': None}
+        elif 'response' in response_data: # Fallback for generate-like response from chat endpoint or direct /api/generate
+            raw_text = response_data['response']
+            logger.info(f"Ollama (generate-like response) translation successful for model '{ollama_model}'.")
         else:
-            logger.error(f"Unexpected response structure from Ollama /api/chat for model '{ollama_model}': {response_data}")
-            return {'translated_text': None, 'error': f"Unexpected response structure from Ollama /api/chat: {response_data}"}
+            logger.error(f"Unexpected response structure from Ollama for model '{ollama_model}': {response_data}")
+            return {'translated_text': None, 'error': f"Unexpected response structure from Ollama: {response_data}"}
+
+        # Cleaning steps
+        processed_text = raw_text
+        
+        # 1. <think> block removal
+        closing_think_tag = "</think>"
+        think_tag_index = processed_text.find(closing_think_tag)
+        if think_tag_index != -1:
+            processed_text = processed_text[think_tag_index + len(closing_think_tag):]
+            logger.debug("Found and removed <think> block from translator output.")
+
+        # 2. Strip common unwanted prefixes/labels
+        prefixes_to_remove = [
+            "translation:", "translated text:", "text summary:", "summary:", 
+            "和解:", "总结:", "译文:", "翻译:", "文本摘要:", "摘要:"
+        ]
+        temp_lower_text = processed_text.lower()
+        for prefix in prefixes_to_remove:
+            if temp_lower_text.startswith(prefix.lower()):
+                processed_text = processed_text[len(prefix):].lstrip()
+                temp_lower_text = processed_text.lower() 
+                logger.debug(f"Removed prefix '{prefix}' from translator output.")
+        
+        # 3. Trim whitespace
+        cleaned_text = processed_text.strip()
+        
+        return {'translated_text': cleaned_text, 'error': None}
 
     except requests.exceptions.RequestException as e_chat:
         logger.warning(f"Ollama /api/chat failed for model '{ollama_model}': {e_chat}. Trying /api/generate...")
@@ -95,9 +125,30 @@ def translate_text(text: str, target_lang_code: str, source_lang_code: str = "au
             response.raise_for_status()
             response_data = response.json()
             if 'response' in response_data:
-                translated_text = response_data['response'].strip()
+                raw_text_generate = response_data['response']
                 logger.info(f"Ollama /api/generate translation successful for model '{ollama_model}'.")
-                return {'translated_text': translated_text, 'error': None}
+                
+                # Cleaning steps for /api/generate response
+                processed_text_generate = raw_text_generate
+                closing_think_tag_gen = "</think>"
+                think_tag_index_gen = processed_text_generate.find(closing_think_tag_gen)
+                if think_tag_index_gen != -1:
+                    processed_text_generate = processed_text_generate[think_tag_index_gen + len(closing_think_tag_gen):]
+                    logger.debug("Found and removed <think> block from translator output (/api/generate).")
+
+                prefixes_to_remove_gen = [
+                    "translation:", "translated text:", "text summary:", "summary:", 
+                    "和解:", "总结:", "译文:", "翻译:", "文本摘要:", "摘要:"
+                ]
+                temp_lower_text_gen = processed_text_generate.lower()
+                for prefix_gen in prefixes_to_remove_gen:
+                    if temp_lower_text_gen.startswith(prefix_gen.lower()):
+                        processed_text_generate = processed_text_generate[len(prefix_gen):].lstrip()
+                        temp_lower_text_gen = processed_text_generate.lower()
+                        logger.debug(f"Removed prefix '{prefix_gen}' from translator output (/api/generate).")
+                
+                cleaned_text_generate = processed_text_generate.strip()
+                return {'translated_text': cleaned_text_generate, 'error': None}
             else:
                 logger.error(f"Unexpected response structure from Ollama /api/generate for model '{ollama_model}': {response_data}")
                 return {'translated_text': None, 'error': f"Unexpected response structure from Ollama /api/generate: {response_data}"}
