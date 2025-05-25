@@ -233,167 +233,128 @@ def handle_generate_audio_subtitles(
     for item in actual_selected_items:
         original_title = item.get('_original_title', 'Untitled')
         full_summary = item.get('_full_summary', '')
-        text_for_tts = original_title + ". " + full_summary # This will be the text for current item for summarization/TTS
-        ai_generated_summary = None # Initialize ai_generated_summary
-        translated_text_for_json = None # Initialize for storing full translated text
-
-        # Parse target language choice for processing (translation and summarization)
-        target_lang_code_for_processing = None
-        if target_language_choice and target_language_choice != "As Source (No Translation)":
-            match = re.search(r'\((.*?)\)', target_language_choice)
-            if match:
-                target_lang_code_for_processing = match.group(1)
-                logger.info(f"Target language code for processing selected: {target_lang_code_for_processing}")
-            else:
-                logger.warning(f"Could not parse language code from: {target_language_choice}")
         
-        # Actual Translation Step
-        if target_lang_code_for_processing:
-            logger.info(f"Attempting translation of item '{original_title}' to {target_lang_code_for_processing} using Ollama model '{ollama_model_name}' at URL '{ollama_api_url_cfg}'...")
-            # current_translation_api_key = os.getenv("TRANSLATION_API_KEY") # No longer needed for Ollama
-            
-            translation_result = translator.translate_text(
-                text=text_for_tts,
-                target_lang_code=target_lang_code_for_processing,
-                source_lang_code="auto", # Or a fixed source like "en"
-                ollama_model=ollama_model_name, # Pass the Ollama model name from UI
-                ollama_api_url=ollama_api_url_cfg  # Pass the Ollama API URL from UI config
-            )
-            if translation_result['error']:
-                logger.error(f"Translation Error for item '{original_title}': {translation_result['error']}")
-                logger.warning(f"Proceeding with original text for item '{original_title}' due to translation error.")
-            elif translation_result['translated_text'] is not None:
-                text_for_tts = translation_result['translated_text']
-                logger.info(f"Successfully translated item '{original_title}' to {target_lang_code_for_processing}.")
-                translated_text_for_json = translation_result['translated_text'] # Capture full translated text
-            else: # Handles both error and (None, None) case
-                logger.warning(f"Translation attempt for item '{original_title}' returned no text or an error. Proceeding with original text for TTS/Summarization.")
-                # translated_text_for_json remains None
-        else:
-            logger.info(f"No target language selected for item '{original_title}', skipping translation.")
-            # translated_text_for_json remains None
-
-        # Collect data for JSON export
-        item_data_for_json = {
-            'id': item.get('id'),
-            'original_title': original_title,
-            'full_summary': full_summary,
-            'source_url': item.get('source_url', 'N/A'),
-            'published_date': item.get('published_date', 'N/A')
-            # ai_summary will be added dynamically below
-        }
-        # This append will be moved down after ai_summary might be updated.
-        # consolidated_selected_news_data.append(item_data_for_json) 
-
+        # Step 1: Initial Text Setup
+        original_text_for_processing = original_title + ". " + full_summary
         item_log_prefix = f"Processing Item: {original_title}"
         logger.info(item_log_prefix)
         log_messages.append(f"\n{item_log_prefix}")
         output_links_markdown += f"**{original_title}**:\n"
 
+        # Step 2: Summarization Stage (on original English text)
+        english_summary_content = None
+        text_for_translation_or_tts = original_text_for_processing # Default to original if summarization fails or is skipped
 
-        # Define base_filename for item's summarized text files (if summarization happens)
-        # This base_filename might still be useful if summarization saves files.
-        timestamp_item_processing = datetime.now().strftime("%Y%m%d%H%M%S") # Timestamp for this specific item's processing artifacts if any
-        topic_prefix_item = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
-        safe_title_part_item = "".join(c if c.isalnum() or c in (' ', '_') else '_' for c in original_title[:30]).rstrip().replace(' ', '_')
-        base_filename_item = f"{timestamp_item_processing}_{topic_prefix_item}{safe_title_part_item}"
-        
-        # Removed individual _original_content.txt saving logic as per requirements
-        # # Save original selected content
-        # original_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_original_content.txt")
-        # 
-        # # DEBUG LOGS START
-        # logger.debug(f"OUTPUT_DIR is: {OUTPUT_DIR}")
-        # logger.debug(f"Calculated original_content_filepath is: {original_content_filepath}")
-        # logger.debug(f"Does OUTPUT_DIR ({OUTPUT_DIR}) exist at this point? {os.path.exists(OUTPUT_DIR)}")
-        # logger.debug(f"Is OUTPUT_DIR ({OUTPUT_DIR}) a directory? {os.path.isdir(OUTPUT_DIR)}")
-        # # The following line is to check the directory part of original_content_filepath itself
-        # logger.debug(f"Parent directory of original_content_filepath ({os.path.dirname(original_content_filepath)}) exists? {os.path.exists(os.path.dirname(original_content_filepath))}")
-        # # DEBUG LOGS END
-        # 
-        # output_links_markdown += f"**{original_title}**:\n" # Moved up
-        # try:
-        #     with open(original_content_filepath, "w", encoding="utf-8") as f:
-        #         f.write(text_for_tts) # text_for_tts initially holds the full original content
-        #     logger.info(f"Saved original content for '{original_title}' to {original_content_filepath}")
-        #     log_messages.append(f"  Saved original content to: {original_content_filepath}")
-        #     original_text_link = f"[{os.path.basename(original_content_filepath)}](./file={original_content_filepath})"
-        #     output_links_markdown += f"  - Original Text: {original_text_link}\n"
-        # except Exception as e:
-        #     logger.error(f"Failed to save original content for '{original_title}' to {original_content_filepath}: {e}", exc_info=True)
-        #     log_messages.append(f"  Error saving original content: {e}")
-        #     output_links_markdown += f"  - Error saving original text.\n"
-
-        if summarizer_choice != "None" and text_for_tts.strip():
-            msg = f"  Attempting summarization with {summarizer_choice} for text (language: {target_lang_code_for_processing if target_lang_code_for_processing else 'source language'})..."
+        if summarizer_choice != "None" and original_text_for_processing.strip():
+            msg = f"  Attempting summarization of original English content with {summarizer_choice}..."
             logger.info(msg)
             log_messages.append(msg)
             summary_result = summarizer.summarize_text(
-                text_to_summarize=text_for_tts, # This text_for_tts is now potentially translated
-                service=summarizer_choice, 
+                text_to_summarize=original_text_for_processing,
+                service=summarizer_choice,
                 api_key=(gemini_api_key_cfg if summarizer_choice == "gemini" else openrouter_api_key_cfg if summarizer_choice == "openrouter" else None),
-                ollama_model=ollama_model_name, ollama_api_url=ollama_api_url_cfg,
-                target_language=target_lang_code_for_processing # Pass the same lang code to summarizer
+                ollama_model=ollama_model_name, 
+                ollama_api_url=ollama_api_url_cfg,
+                target_language=None # Ensure summarizer produces English summary (or its default)
             )
             if summary_result['error']:
-                msg = f"  Summarization Error: {summary_result['error']}"
+                msg = f"  Summarization Error (original English): {summary_result['error']}"
                 logger.error(msg)
                 log_messages.append(msg)
+                # english_summary_content remains None
+                # text_for_translation_or_tts remains original_text_for_processing
+            elif summary_result['summary'] and summary_result['summary'].strip():
+                english_summary_content = summary_result['summary']
+                text_for_translation_or_tts = english_summary_content # Update for next stage
+                msg = f"  Summarization of original English content successful. New length: {len(english_summary_content)}"
+                logger.info(msg)
+                log_messages.append(msg)
             else:
-                summarized_text = summary_result['summary']
-                if summarized_text and summarized_text.strip(): # Check if summary is not empty
-                    ai_generated_summary = summarized_text # Update ai_generated_summary
-                    # item_data_for_json['ai_summary'] = ai_generated_summary # Old static update
-                    msg = f"  Summarization Successful. New text length: {len(summarized_text)}"
-                    logger.info(msg)
-                    log_messages.append(msg)
-                    
-                    # The following block for saving summarized content to a file is now removed/commented out.
-                    # summarized_content_filepath = os.path.join(OUTPUT_DIR, f"{base_filename_item}_summarized_content.txt")
-                else:
-                    msg = f"  Summarization resulted in empty text. Not using."
-                    logger.warning(msg)
-                    log_messages.append(msg)
-                    # ai_generated_summary remains None
-                    summarized_text = text_for_tts # Fallback to original if summary is empty
-                # try:
-                #     with open(summarized_content_filepath, "w", encoding="utf-8") as f:
-                #         f.write(summarized_text)
-                #     logger.info(f"Saved summarized content for '{original_title}' to {summarized_content_filepath}")
-                #     log_messages.append(f"  Saved summarized content to: {summarized_content_filepath}")
-                #     summarized_text_link = f"[{os.path.basename(summarized_content_filepath)}](./file={summarized_content_filepath})"
-                #     output_links_markdown += f"  - Summarized Text: {summarized_text_link}\n"
-                # except Exception as e:
-                #     logger.error(f"Failed to save summarized content for '{original_title}' to {summarized_content_filepath}: {e}", exc_info=True)
-                #     log_messages.append(f"  Error saving summarized content: {e}")
-                #     output_links_markdown += f"  - Error saving summarized text.\n"
-                
-                text_for_tts = summarized_text # Update text_for_tts to the summarized version for this item
-        else: # No summarization or summarization failed
-            # Ensure a newline if only original text link was added and no summarized file link.
-            if not output_links_markdown.strip().endswith("\n"):
+                msg = "  Summarization of original English content resulted in empty text. Using original text for subsequent steps."
+                logger.warning(msg)
+                log_messages.append(msg)
+                # english_summary_content remains None
+                # text_for_translation_or_tts remains original_text_for_processing
+        else:
+            logger.info("  Summarization skipped or input was empty. Using original text for subsequent steps.")
+            log_messages.append("  Summarization skipped or input was empty.")
+            # text_for_translation_or_tts remains original_text_for_processing
+            if not output_links_markdown.strip().endswith("\n"): # Ensure proper spacing if no summary files were mentioned
                 output_links_markdown += "\n"
+
+
+        # Step 3: Translation Stage (on English summary or original English text)
+        translated_text_content = None 
+        final_text_for_tts = text_for_translation_or_tts # Default to English (original or summary)
+
+        target_lang_code_for_processing = None
+        if target_language_choice and target_language_choice != "As Source (No Translation)":
+            match = re.search(r'\((.*?)\)', target_language_choice)
+            if match:
+                target_lang_code_for_processing = match.group(1)
+                logger.info(f"  Target language for translation selected: {target_lang_code_for_processing}")
+            else:
+                logger.warning(f"  Could not parse language code from: {target_language_choice} for translation.")
         
-        # Add translated text and summarized text to item_data_for_json
+        if target_lang_code_for_processing and text_for_translation_or_tts.strip():
+            msg = f"  Attempting translation of '{'English summary' if english_summary_content else 'original English text'}' to {target_lang_code_for_processing}..."
+            logger.info(msg)
+            log_messages.append(msg)
+            
+            translation_result = translator.translate_text(
+                text=text_for_translation_or_tts,
+                target_lang_code=target_lang_code_for_processing,
+                source_lang_code="en", # Source is known to be English (either original or summarized)
+                ollama_model=ollama_model_name,
+                ollama_api_url=ollama_api_url_cfg
+            )
+            if translation_result['error']:
+                msg = f"  Translation Error to {target_lang_code_for_processing}: {translation_result['error']}"
+                logger.error(msg)
+                log_messages.append(msg)
+                # translated_text_content remains None
+                # final_text_for_tts remains text_for_translation_or_tts (English)
+            elif translation_result['translated_text'] and translation_result['translated_text'].strip():
+                translated_text_content = translation_result['translated_text']
+                final_text_for_tts = translated_text_content # Update for TTS
+                msg = f"  Translation to {target_lang_code_for_processing} successful. New length: {len(translated_text_content)}"
+                logger.info(msg)
+                log_messages.append(msg)
+            else:
+                msg = f"  Translation to {target_lang_code_for_processing} resulted in empty text. Using English text for TTS."
+                logger.warning(msg)
+                log_messages.append(msg)
+                # translated_text_content remains None
+                # final_text_for_tts remains text_for_translation_or_tts (English)
+        elif target_lang_code_for_processing and not text_for_translation_or_tts.strip():
+            msg = f"  Skipping translation to {target_lang_code_for_processing} as input text is empty."
+            logger.info(msg)
+            log_messages.append(msg)
+        else:
+            logger.info("  No translation selected or input text was empty. TTS will use English content.")
+            log_messages.append("  Translation skipped. TTS will use English content.")
+            # final_text_for_tts remains text_for_translation_or_tts (English)
+        
+        # Step 4: JSON Population Stage
+        item_data_for_json = {
+            'id': item.get('id'),
+            'original_title': original_title, # Keep original title
+            'full_summary_original': full_summary, # Keep original full summary (English)
+            'source_url': item.get('source_url', 'N/A'),
+            'published_date': item.get('published_date', 'N/A'),
+            'ai_summary_source': english_summary_content # This is the English summary, or None
+        }
         if target_lang_code_for_processing:
-            # Save the full translated text (before summarization) under ai_summary_{lang_code}
-            item_data_for_json[f"ai_summary_{target_lang_code_for_processing}"] = translated_text_for_json
-        # else:
-            # If no target_lang_code_for_processing, no ai_summary_{lang_code} key is created for translated text.
-            # Or, if we want to explicitly state no translation for a specific language was done:
-            # if target_language_choice != "As Source (No Translation)" and target_lang_code_for_processing: # e.g. 'zh' was selected but parsing failed
-            #    item_data_for_json[f"ai_summary_{target_lang_code_for_processing}"] = None
-        
-        # Always save the output of the summarization step (or None if no summarization) under "ai_summary_source"
-        item_data_for_json["ai_summary_source"] = ai_generated_summary
+            item_data_for_json[f"ai_summary_{target_lang_code_for_processing}"] = translated_text_content # This is translated summary/original, or None
         
         consolidated_selected_news_data.append(item_data_for_json)
 
-        # Add the final text (original or summarized) for this item to the global list
-        all_texts_for_global_processing.append(text_for_tts)
-        # Ensure a newline if no summarized file link was added for this item.
+        # Step 5: TTS Input
+        all_texts_for_global_processing.append(final_text_for_tts)
+        
+        # Ensure a newline in markdown if no specific file links were added for this item (e.g. if summarization was skipped)
         if not output_links_markdown.strip().endswith("\n"):
-             output_links_markdown += "\n"
+             output_links_markdown += "\n" # Should already be handled by initial item title print
         output_links_markdown += "\n" # Add a newline after each item's text file links block
 
     # --- Save consolidated data to JSON (after the loop) ---
