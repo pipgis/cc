@@ -7,9 +7,10 @@ logger = logging.getLogger(__name__)
 
 # --- Helper Functions for Each Service ---
 
-def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url: str) -> dict:
+def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url: str, target_language: str = None) -> dict:
     """
     Summarizes text using a local Ollama API.
+    Supports language-specific prompts and post-processing for Chinese ('zh').
     """
     if not ollama_api_url:
         return {'summary': None, 'error': "Ollama API URL not provided."}
@@ -21,12 +22,17 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
         ollama_api_url = 'http://' + ollama_api_url
 
     # Prefer /api/chat for more structured interaction, similar to OpenAI
-    # Simple prompt for summarization
-    prompt = f"Summarize the following text in a concise manner:\n\n{text_to_summarize}\n\nSummary:"
+    # Adjust prompt based on target_language
+    if target_language == 'zh':
+        prompt = f"请用中文简明扼要地总结以下文本：\n\n{text_to_summarize}\n\n摘要："
+    else:
+        prompt = f"Summarize the following text in a concise manner:\n\n{text_to_summarize}\n\nSummary:"
+
     payload = {
         "model": ollama_model,
         "messages": [{"role": "user", "content": prompt}],
-        "stream": False # For a single response
+        "stream": False, # For a single response
+        "options": {"temperature": 0.2} # Set temperature
     }
     
     # Try /api/chat first
@@ -51,6 +57,24 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
                 processed_summary = raw_summary
             
             summary = processed_summary.strip()
+
+            # Post-processing for Chinese summaries
+            if target_language == 'zh':
+                english_prefixes_to_remove = [
+                    "Summary:", "summary:", "Here's a summary:", "here's a summary:", 
+                    "The summary is:", "the summary is:", "In summary,", "in summary,"
+                ]
+                temp_lower_summary = summary.lower()
+                for prefix in english_prefixes_to_remove:
+                    if temp_lower_summary.startswith(prefix.lower()):
+                        # Find the actual prefix in the original summary to preserve case for the rest
+                        original_prefix = summary[:len(prefix)]
+                        if original_prefix.lower() == prefix.lower():
+                            summary = summary[len(prefix):].lstrip(": ").lstrip() # Remove prefix and potential colon/space
+                            temp_lower_summary = summary.lower() # Update for next iteration if any
+                            logger.debug(f"Removed English prefix '{original_prefix}' from Chinese summary.")
+                            break # Assuming only one such prefix would appear
+
             logger.info(f"Ollama /api/chat summarization successful for model '{ollama_model}'.")
             return {'summary': summary, 'error': None}
 
@@ -65,6 +89,23 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
                 processed_summary = raw_summary
             
             summary = processed_summary.strip()
+
+            # Post-processing for Chinese summaries (duplicate for this path, refactor if preferred)
+            if target_language == 'zh':
+                english_prefixes_to_remove = [
+                    "Summary:", "summary:", "Here's a summary:", "here's a summary:",
+                    "The summary is:", "the summary is:", "In summary,", "in summary,"
+                ]
+                temp_lower_summary = summary.lower()
+                for prefix in english_prefixes_to_remove:
+                    if temp_lower_summary.startswith(prefix.lower()):
+                        original_prefix = summary[:len(prefix)]
+                        if original_prefix.lower() == prefix.lower():
+                            summary = summary[len(prefix):].lstrip(": ").lstrip()
+                            temp_lower_summary = summary.lower()
+                            logger.debug(f"Removed English prefix '{original_prefix}' from Chinese summary (generate-like response).")
+                            break
+            
             logger.info(f"Ollama /api/chat (unexpectedly) returned /api/generate-like response for model '{ollama_model}'. Processed summary.")
             return {'summary': summary, 'error': None}
         else:
@@ -76,7 +117,8 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
         payload_generate = {
             "model": ollama_model,
             "prompt": prompt, # /api/generate uses "prompt"
-            "stream": False
+            "stream": False,
+            "options": {"temperature": 0.2} # Set temperature for generate
         }
         logger.debug(f"Attempting Ollama /api/generate for model '{ollama_model}' at {generate_api_url}")
         try:
@@ -95,6 +137,23 @@ def _summarize_ollama(text_to_summarize: str, ollama_model: str, ollama_api_url:
                     processed_summary = raw_summary
                 
                 summary = processed_summary.strip()
+
+                # Post-processing for Chinese summaries for /api/generate path
+                if target_language == 'zh':
+                    english_prefixes_to_remove = [
+                        "Summary:", "summary:", "Here's a summary:", "here's a summary:",
+                        "The summary is:", "the summary is:", "In summary,", "in summary,"
+                    ]
+                    temp_lower_summary = summary.lower()
+                    for prefix in english_prefixes_to_remove:
+                        if temp_lower_summary.startswith(prefix.lower()):
+                            original_prefix = summary[:len(prefix)]
+                            if original_prefix.lower() == prefix.lower():
+                                summary = summary[len(prefix):].lstrip(": ").lstrip()
+                                temp_lower_summary = summary.lower()
+                                logger.debug(f"Removed English prefix '{original_prefix}' from Chinese summary (/api/generate).")
+                                break
+                
                 logger.info(f"Ollama /api/generate summarization successful for model '{ollama_model}'.")
                 return {'summary': summary, 'error': None}
             else:
@@ -229,7 +288,7 @@ def summarize_text(text_to_summarize: str, service: str, api_key: str = None,
         logger.info(f"Summarization called with target_language: {target_language}")
 
     if service == "ollama":
-        return _summarize_ollama(text_to_summarize, ollama_model, ollama_api_url)
+        return _summarize_ollama(text_to_summarize, ollama_model, ollama_api_url, target_language=target_language)
     elif service == "gemini":
         return _summarize_gemini(text_to_summarize, api_key)
     elif service == "openrouter":
@@ -274,11 +333,27 @@ if __name__ == '__main__':
             "ollama", 
             ollama_model=ollama_model_test, 
             ollama_api_url=ollama_api_url_test
+            # No target_language specified here, will use default English prompt and no specific post-processing
         )
         if ollama_summary_result['error']:
             logger.error(f"Ollama Error: {ollama_summary_result['error']}")
         else:
             logger.info(f"Ollama Summary ({len(ollama_summary_result['summary'].split())} words): {ollama_summary_result['summary']}")
+        
+        # Test Ollama with Chinese
+        logger.info("--- Testing Ollama (Chinese) ---")
+        ollama_summary_zh_result = summarize_text(
+            sample_text, # Could use a Chinese sample text here for better testing
+            "ollama",
+            ollama_model=ollama_model_test,
+            ollama_api_url=ollama_api_url_test,
+            target_language="zh"
+        )
+        if ollama_summary_zh_result['error']:
+            logger.error(f"Ollama Error (Chinese): {ollama_summary_zh_result['error']}")
+        else:
+            logger.info(f"Ollama Summary (Chinese) ({len(ollama_summary_zh_result['summary'])} chars): {ollama_summary_zh_result['summary']}")
+
     logger.info("-" * 25)
 
     # Test Gemini (requires a valid API key)
