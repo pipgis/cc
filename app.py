@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import re # Import re module
+import copy # ADDED: For deepcopy
 from dotenv import load_dotenv
 from datetime import datetime
 import pandas as pd # For DataFrame
@@ -114,7 +115,6 @@ def handle_fetch_news(urls_text_input):
     # Clear previous items and add new ones with an ID
     global_news_items_store = []
     valid_items_for_df = []
-    # checkbox_choices = [] # REMOVED Initialize checkbox_choices
     item_id_counter = 0
 
     if not fetched_items_raw:
@@ -140,7 +140,6 @@ def handle_fetch_news(urls_text_input):
             '_original_title': item.get('title', 'N/A')
         }
         global_news_items_store.append(processed_item)
-        # checkbox_choices.append((processed_item['title'], processed_item['id'])) # REMOVED Populate checkbox_choices
         valid_items_for_df.append({
             "ID": item_id_counter,
             "Title": processed_item['title'],
@@ -159,93 +158,200 @@ def handle_fetch_news(urls_text_input):
         msg = "No valid news items could be processed into the display table."
         logger.info(msg)
         status_messages.append(msg)
-        # Ensure checkbox_choices is empty if no valid items # REMOVED
-        # checkbox_choices = [] 
     else:
         news_df = pd.DataFrame(valid_items_for_df)
 
     return news_df, "\n".join(status_messages), global_news_items_store
 
 
+def handle_stage_selected_news(selected_indices, all_news_items):
+    """
+    Handles staging selected news items for generation.
+    Creates deep copies of selected items and prepares them for display in the staging DataFrame.
+    """
+    logger.debug(f"handle_stage_selected_news: received selected_indices={selected_indices}")
+    
+    if not selected_indices:
+        logger.info("No news items selected to stage.")
+        return [], pd.DataFrame(columns=["ID", "Title", "Summary"]) 
+
+    staged_items_copies = []
+    for index in selected_indices:
+        if isinstance(index, int) and 0 <= index < len(all_news_items):
+            original_item = all_news_items[index]
+            copied_item = copy.deepcopy(original_item)
+            staged_items_copies.append(copied_item)
+            logger.debug(f"Staging item (ID: {copied_item['id']}, Title: {copied_item['title']})")
+        else:
+            logger.warning(f"Invalid index {index} encountered while staging news items.")
+            
+    if not staged_items_copies:
+        logger.info("No valid news items were staged.")
+        return [], pd.DataFrame(columns=["ID", "Title", "Summary"])
+
+    display_data_for_df = [
+        [item['id'], item['title'], item['_full_summary']] for item in staged_items_copies
+    ]
+    staged_df = pd.DataFrame(display_data_for_df, columns=["ID", "Title", "Summary"])
+
+    logger.info(f"Staged {len(staged_items_copies)} news items for generation.")
+    return staged_items_copies, staged_df
+
+
+def handle_edit_staged_news(edited_staged_df: pd.DataFrame, current_staged_state_list: list):
+    """
+    Handles edits made to the staged_news_df.
+    Updates the staged_news_data_state with the changes.
+    """
+    logger.debug(f"handle_edit_staged_news: received edited DataFrame with {edited_staged_df.shape[0]} rows.")
+    
+    if current_staged_state_list is None:
+        current_staged_state_list = []
+
+    edited_map = {}
+    for _index, row in edited_staged_df.iterrows():
+        try:
+            item_id = int(row['ID']) 
+            edited_map[item_id] = {'title': row['Title'], 'summary': row['Summary']}
+        except ValueError:
+            logger.error(f"Could not parse ID {row['ID']} as integer during edit handling. Skipping row.")
+            continue
+        except KeyError as e:
+            logger.error(f"Missing expected column {e} in edited DataFrame row. Skipping row: {row}")
+            continue
+
+    updated_staged_items_state = []
+    items_to_process = copy.deepcopy(current_staged_state_list)
+
+    for item_dict in items_to_process:
+        item_id = item_dict.get('id')
+        
+        if item_id in edited_map:
+            edited_content = edited_map[item_id]
+            
+            if item_dict.get('title') != edited_content['title']:
+                logger.info(f"Updating title for staged item ID {item_id}: '{item_dict.get('title')}' -> '{edited_content['title']}'")
+                item_dict['title'] = edited_content['title']
+                if '_original_title' in item_dict:
+                     item_dict['_original_title'] = edited_content['title']
+
+            if item_dict.get('_full_summary') != edited_content['summary']:
+                logger.info(f"Updating summary for staged item ID {item_id}.")
+                item_dict['_full_summary'] = edited_content['summary']
+        
+        updated_staged_items_state.append(item_dict)
+
+    logger.debug(f"handle_edit_staged_news: Updated staged_news_data_state: {updated_staged_items_state}")
+    return updated_staged_items_state
+
+def handle_staged_df_selection(evt: gr.SelectData):
+    logger.debug(f"handle_staged_df_selection: evt.index={evt.index}")
+    if isinstance(evt.index, list):
+        return evt.index
+    elif isinstance(evt.index, tuple) and len(evt.index) == 2: # cell click
+        return [evt.index[0]] # return row index as a list
+    logger.debug("handle_staged_df_selection: No valid indices returned from event.")
+    return []
+
+def handle_remove_staged_items(indices_to_remove, current_staged_items_data):
+    """
+    Removes selected items from the staged_news_data_state and updates the staged_news_df.
+    """
+    if not indices_to_remove or current_staged_items_data is None: 
+        logger.info("No indices to remove or no data in staging area.")
+        current_display_data = [[item['id'], item['title'], item['_full_summary']] for item in current_staged_items_data if item] if current_staged_items_data else []
+        current_df = pd.DataFrame(current_display_data, columns=["ID", "Title", "Summary"])
+        return current_staged_items_data if current_staged_items_data is not None else [], current_df
+
+    logger.info(f"Attempting to remove items at visual indices: {indices_to_remove} from staged data (current size: {len(current_staged_items_data)}).")
+
+    valid_indices_to_remove = sorted([idx for idx in indices_to_remove if isinstance(idx, int)], reverse=True)
+    
+    if not valid_indices_to_remove:
+        logger.info("No valid integer indices provided for removal.")
+        current_display_data = [[item['id'], item['title'], item['_full_summary']] for item in current_staged_items_data if item]
+        current_df = pd.DataFrame(current_display_data, columns=["ID", "Title", "Summary"])
+        return current_staged_items_data, current_df
+
+    modified_staged_items_data = copy.deepcopy(current_staged_items_data)
+    
+    removed_count = 0
+    for index in valid_indices_to_remove:
+        if 0 <= index < len(modified_staged_items_data):
+            removed_item = modified_staged_items_data.pop(index)
+            logger.info(f"Removed item: ID {removed_item.get('id')}, Title '{removed_item.get('title')}' at visual index {index}.")
+            removed_count += 1
+        else:
+            logger.warning(f"Index {index} is out of bounds for removal. List size: {len(modified_staged_items_data)}")
+
+    if removed_count == 0:
+        logger.info("No items were actually removed based on provided indices.")
+        current_display_data = [[item['id'], item['title'], item['_full_summary']] for item in current_staged_items_data if item]
+        current_df = pd.DataFrame(current_display_data, columns=["ID", "Title", "Summary"])
+        return current_staged_items_data, current_df
+
+    if not modified_staged_items_data:
+        new_staged_df = pd.DataFrame(columns=["ID", "Title", "Summary"])
+    else:
+        new_display_data = [[item['id'], item['title'], item['_full_summary']] for item in modified_staged_items_data if item]
+        new_staged_df = pd.DataFrame(new_display_data, columns=["ID", "Title", "Summary"])
+        
+    logger.info(f"Successfully removed {removed_count} items. Staged data updated. New size: {len(modified_staged_items_data)}")
+    return modified_staged_items_data, new_staged_df
+
+
 def handle_generate_audio_subtitles(
-    selected_indices, 
-    news_data_state, 
+    news_data_state,  # This is `staged_news_data_state`
     news_topic,
     summarizer_choice, ollama_model_name, ollama_api_url_cfg,
     gemini_api_key_cfg, openrouter_api_key_cfg,
     tts_service, tts_voice_gender,
-    max_chars_per_segment_cfg, # New parameter for max chars per segment
+    max_chars_per_segment_cfg, 
     azure_tts_key_cfg, azure_tts_region_cfg,
     google_tts_path_cfg, minimax_tts_key_cfg, minimax_tts_group_id_cfg,
-    target_language_choice # New parameter for target language
+    target_language_choice 
 ):
     """
-    Generates audio and subtitles for selected news items.
+    Generates audio and subtitles for selected news items from the STAGING AREA.
     """
-    logger.debug(f"handle_generate_audio_subtitles: received selected_indices={selected_indices}, type={type(selected_indices)}")
-    log_messages = [] # For returning to Gradio Textbox
+    # The 'selected_indices' parameter was removed as we process all items in news_data_state (staged_news_data_state)
+    logger.debug(f"handle_generate_audio_subtitles: using news_data_state (staged items) directly. Number of items: {len(news_data_state) if news_data_state else 0}")
+    log_messages = [] 
     output_links_markdown = ""
-    logger.info("Starting generation process...")
-    log_messages.append("Starting generation process...")
+    logger.info("Starting generation process for staged items...")
+    log_messages.append("Starting generation process for staged items...")
 
-    # Initialize collectors for global processing
     all_texts_for_global_processing = []
-    consolidated_selected_news_data = [] # For storing data of selected items for JSON export
+    consolidated_selected_news_data = [] 
     combined_text_for_audio = ""
 
-    # selected_indices now contains 0-based row indices from the DataFrame selection.
-    if not selected_indices:
-        msg = "No news items selected for generation."
-        logger.warning(msg)
-        log_messages.append(msg)
-        return "\n".join(log_messages), ""
+    actual_selected_items = news_data_state # Use all items from the staged state
     
-    actual_selected_items = []
-    if isinstance(selected_indices, list):
-        for index in selected_indices:
-            # Validate index against the bounds of news_data_state
-            if isinstance(index, int) and 0 <= index < len(news_data_state):
-                actual_selected_items.append(news_data_state[index])
-            else:
-                msg = f"Warning: Invalid or out-of-range selected index {index} ignored. News data size: {len(news_data_state)}."
-                logger.warning(msg)
-                log_messages.append(msg)
-    else:
-        # This case should ideally not be reached if selected_df_indices_state is always a list.
-        msg = "Selection format not as expected. Expected a list of indices."
-        logger.error(msg) 
-        log_messages.append(msg)
-        return "\n".join(log_messages), ""
-
-    if not actual_selected_items: # If all provided indices were invalid or list was initially empty
-        msg = "No valid news items to process after selection logic."
+    if not actual_selected_items:
+        msg = "No news items in the staging area for generation."
         logger.warning(msg)
         log_messages.append(msg)
         return "\n".join(log_messages), ""
 
-    msg = f"Processing {len(actual_selected_items)} selected news item(s)."
+    msg = f"Processing {len(actual_selected_items)} staged news item(s)."
     logger.info(msg)
     log_messages.append(msg)
 
-    # timestamp_run = datetime.now().strftime("%Y%m%d%H%M%S") # Timestamp for this run's individual files - No longer needed for individual original files
-
     for item in actual_selected_items:
-        original_title = item.get('_original_title', 'Untitled')
+        original_title = item.get('title', item.get('_original_title', 'Untitled')) # Use 'title' first, then '_original_title'
         full_summary = item.get('_full_summary', '')
         
-        # Step 1: Initial Text Setup
         original_text_for_processing = original_title + ". " + full_summary
         item_log_prefix = f"Processing Item: {original_title}"
         logger.info(item_log_prefix)
         log_messages.append(f"\n{item_log_prefix}")
         output_links_markdown += f"**{original_title}**:\n"
 
-        # Step 2: Summarization Stage (on original English text)
         english_summary_content = None
-        text_for_translation_or_tts = original_text_for_processing # Default to original if summarization fails or is skipped
+        text_for_translation_or_tts = original_text_for_processing
 
         if summarizer_choice != "None" and original_text_for_processing.strip():
-            msg = f"  Attempting summarization of original English content with {summarizer_choice}..."
+            msg = f"  Attempting summarization of content with {summarizer_choice}..."
             logger.info(msg)
             log_messages.append(msg)
             summary_result = summarizer.summarize_text(
@@ -254,37 +360,30 @@ def handle_generate_audio_subtitles(
                 api_key=(gemini_api_key_cfg if summarizer_choice == "gemini" else openrouter_api_key_cfg if summarizer_choice == "openrouter" else None),
                 ollama_model=ollama_model_name, 
                 ollama_api_url=ollama_api_url_cfg,
-                target_language=None # Ensure summarizer produces English summary (or its default)
+                target_language=None 
             )
             if summary_result['error']:
-                msg = f"  Summarization Error (original English): {summary_result['error']}"
+                msg = f"  Summarization Error: {summary_result['error']}"
                 logger.error(msg)
                 log_messages.append(msg)
-                # english_summary_content remains None
-                # text_for_translation_or_tts remains original_text_for_processing
             elif summary_result['summary'] and summary_result['summary'].strip():
                 english_summary_content = summary_result['summary']
-                text_for_translation_or_tts = english_summary_content # Update for next stage
-                msg = f"  Summarization of original English content successful. New length: {len(english_summary_content)}"
+                text_for_translation_or_tts = english_summary_content
+                msg = f"  Summarization successful. New length: {len(english_summary_content)}"
                 logger.info(msg)
                 log_messages.append(msg)
             else:
-                msg = "  Summarization of original English content resulted in empty text. Using original text for subsequent steps."
+                msg = "  Summarization resulted in empty text. Using original text."
                 logger.warning(msg)
                 log_messages.append(msg)
-                # english_summary_content remains None
-                # text_for_translation_or_tts remains original_text_for_processing
         else:
-            logger.info("  Summarization skipped or input was empty. Using original text for subsequent steps.")
+            logger.info("  Summarization skipped or input was empty.")
             log_messages.append("  Summarization skipped or input was empty.")
-            # text_for_translation_or_tts remains original_text_for_processing
-            if not output_links_markdown.strip().endswith("\n"): # Ensure proper spacing if no summary files were mentioned
+            if not output_links_markdown.strip().endswith("\n"): 
                 output_links_markdown += "\n"
 
-
-        # Step 3: Translation Stage (on English summary or original English text)
         translated_text_content = None 
-        final_text_for_tts = text_for_translation_or_tts # Default to English (original or summary)
+        final_text_for_tts = text_for_translation_or_tts
 
         target_lang_code_for_processing = None
         if target_language_choice and target_language_choice != "As Source (No Translation)":
@@ -296,14 +395,14 @@ def handle_generate_audio_subtitles(
                 logger.warning(f"  Could not parse language code from: {target_language_choice} for translation.")
         
         if target_lang_code_for_processing and text_for_translation_or_tts.strip():
-            msg = f"  Attempting translation of '{'English summary' if english_summary_content else 'original English text'}' to {target_lang_code_for_processing}..."
+            msg = f"  Attempting translation to {target_lang_code_for_processing}..."
             logger.info(msg)
             log_messages.append(msg)
             
             translation_result = translator.translate_text(
                 text=text_for_translation_or_tts,
                 target_lang_code=target_lang_code_for_processing,
-                source_lang_code="en", # Source is known to be English (either original or summarized)
+                source_lang_code="en", 
                 ollama_model=ollama_model_name,
                 ollama_api_url=ollama_api_url_cfg
             )
@@ -311,94 +410,86 @@ def handle_generate_audio_subtitles(
                 msg = f"  Translation Error to {target_lang_code_for_processing}: {translation_result['error']}"
                 logger.error(msg)
                 log_messages.append(msg)
-                # translated_text_content remains None
-                # final_text_for_tts remains text_for_translation_or_tts (English)
             elif translation_result['translated_text'] and translation_result['translated_text'].strip():
                 translated_text_content = translation_result['translated_text']
-                final_text_for_tts = translated_text_content # Update for TTS
+                final_text_for_tts = translated_text_content
                 msg = f"  Translation to {target_lang_code_for_processing} successful. New length: {len(translated_text_content)}"
                 logger.info(msg)
                 log_messages.append(msg)
             else:
-                msg = f"  Translation to {target_lang_code_for_processing} resulted in empty text. Using English text for TTS."
+                msg = f"  Translation to {target_lang_code_for_processing} resulted in empty text. Using previous text for TTS."
                 logger.warning(msg)
                 log_messages.append(msg)
-                # translated_text_content remains None
-                # final_text_for_tts remains text_for_translation_or_tts (English)
         elif target_lang_code_for_processing and not text_for_translation_or_tts.strip():
             msg = f"  Skipping translation to {target_lang_code_for_processing} as input text is empty."
             logger.info(msg)
             log_messages.append(msg)
         else:
-            logger.info("  No translation selected or input text was empty. TTS will use English content.")
-            log_messages.append("  Translation skipped. TTS will use English content.")
-            # final_text_for_tts remains text_for_translation_or_tts (English)
+            logger.info("  No translation selected or input text was empty. TTS will use previous content.")
+            log_messages.append("  Translation skipped.")
         
-        # Step 4: JSON Population Stage
         item_data_for_json = {
             'id': item.get('id'),
-            'original_title': original_title, # Keep original title
-            'full_summary_original': full_summary, # Keep original full summary (English)
+            'original_title': item.get('_original_title', 'Untitled'), 
+            'editable_title': item.get('title', 'Untitled'), # The title that might have been edited
+            'full_summary_original_language': item.get('_full_summary', ''), # The summary that might have been edited
             'source_url': item.get('source_url', 'N/A'),
             'published_date': item.get('published_date', 'N/A'),
-            'ai_summary_source': english_summary_content # This is the English summary, or None
+            'ai_summary_english': english_summary_content 
         }
         if target_lang_code_for_processing:
-            item_data_for_json[f"ai_summary_{target_lang_code_for_processing}"] = translated_text_content # This is translated summary/original, or None
-        
-        consolidated_selected_news_data.append(item_data_for_json)
+            item_data_for_json[f"content_for_tts_{target_lang_code_for_processing}"] = translated_text_content
+        else:
+             item_data_for_json[f"content_for_tts_english"] = final_text_for_tts
 
-        # Step 5: TTS Input
+        consolidated_selected_news_data.append(item_data_for_json)
         all_texts_for_global_processing.append(final_text_for_tts)
         
-        # Ensure a newline in markdown if no specific file links were added for this item (e.g. if summarization was skipped)
         if not output_links_markdown.strip().endswith("\n"):
-             output_links_markdown += "\n" # Should already be handled by initial item title print
-        output_links_markdown += "\n" # Add a newline after each item's text file links block
+             output_links_markdown += "\n"
+        output_links_markdown += "\n"
 
-    # --- Save consolidated data to JSON (after the loop) ---
     if consolidated_selected_news_data:
         json_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        json_filename = f"consolidated_selected_news_{json_timestamp}.json"
+        json_filename = f"consolidated_staged_news_{json_timestamp}.json"
         json_filepath = os.path.join(OUTPUT_DIR, json_filename)
         try:
             with open(json_filepath, "w", encoding="utf-8") as f:
                 json.dump(consolidated_selected_news_data, f, ensure_ascii=False, indent=4)
-            logger.info(f"Successfully saved consolidated selected news data to {json_filepath}")
-            log_messages.append(f"\nSaved consolidated selected news data to: {json_filepath}")
+            logger.info(f"Successfully saved consolidated staged news data to {json_filepath}")
+            log_messages.append(f"\nSaved consolidated staged news data to: {json_filepath}")
             json_file_link = f"[{json_filename}](./file={json_filepath})"
-            # Insert this before the "Combined Output" section if it exists, or add a new section
-            # For simplicity, adding it here. Might need restructuring of output_links_markdown for perfect placement.
-            output_links_markdown = f"**Consolidated Selected News Data**:\n  - JSON File: {json_file_link}\n\n" + output_links_markdown
-
+            output_links_markdown = f"**Consolidated Staged News Data**:\n  - JSON File: {json_file_link}\n\n" + output_links_markdown
         except Exception as e:
-            logger.error(f"Failed to save consolidated selected news data to {json_filepath}: {e}", exc_info=True)
-            log_messages.append(f"\nError saving consolidated news data: {e}")
-            output_links_markdown = f"**Consolidated Selected News Data**:\n  - Error saving JSON file.\n\n" + output_links_markdown
+            logger.error(f"Failed to save consolidated staged news data to {json_filepath}: {e}", exc_info=True)
+            log_messages.append(f"\nError saving consolidated staged news data: {e}")
+            output_links_markdown = f"**Consolidated Staged News Data**:\n  - Error saving JSON file.\n\n" + output_links_markdown
     else:
-        log_messages.append("\nNo selected items to save to consolidated JSON.")
+        log_messages.append("\nNo staged items to save to consolidated JSON.")
 
-
-    # --- Global Processing (after the loop) ---
     if not all_texts_for_global_processing:
-        msg = "No text collected from items for global audio generation. Aborting."
+        msg = "No text collected from staged items for global audio generation. Aborting."
         logger.warning(msg)
         log_messages.append(msg)
-        final_msg = "\nIndividual item processing completed. No content for global audio."
+        final_msg = "\nStaged item processing completed. No content for global audio."
         log_messages.append(final_msg)
         logger.info(final_msg)
-        # Return current logs and any item-specific text file links
         return "\n".join(log_messages), output_links_markdown.strip() + "\n\n**Combined Output**:\n  - No content for global audio."
 
-    combined_text_for_audio = "\n\n".join(all_texts_for_global_processing)
-    msg = f"Combined text from {len(all_texts_for_global_processing)} items for global audio. Total length: {len(combined_text_for_audio)}"
+    combined_text_for_audio = "\n\n".join(filter(None, all_texts_for_global_processing)) # Filter out None or empty strings
+    if not combined_text_for_audio.strip():
+        msg = "Combined text for TTS is empty after processing all staged items. Aborting audio generation."
+        logger.warning(msg)
+        log_messages.append(msg)
+        return "\n".join(log_messages), output_links_markdown
+
+    msg = f"Combined text from {len(all_texts_for_global_processing)} staged items for global audio. Total length: {len(combined_text_for_audio)}"
     logger.info(msg)
     log_messages.append(f"\n{msg}")
 
-    # Global Filename Generation
     timestamp_global = datetime.now().strftime("%Y%m%d%H%M%S")
     topic_prefix_global = f"{news_topic.replace(' ', '_')}_" if news_topic and news_topic.strip() else ""
-    base_filename_global = f"{timestamp_global}_{topic_prefix_global}combined_audio"
+    base_filename_global = f"{timestamp_global}_{topic_prefix_global}staged_combined_audio"
 
     global_mp3_filename = os.path.join(OUTPUT_DIR, f"{base_filename_global}.mp3")
     global_srt_filename = os.path.join(OUTPUT_DIR, f"{base_filename_global}.srt")
@@ -408,54 +499,31 @@ def handle_generate_audio_subtitles(
     logger.info(msg)
     log_messages.append(msg)
 
-    # Prepare API key arguments for tts_generator.generate_audio
     azure_api_key_to_pass = azure_tts_key_cfg if tts_service == "azure" else None
-    # Other API keys (Google, Minimax) are passed directly to tts_generator
-
-    # Determine language code for TTS
-    # target_lang_code is derived per item, but TTS is global.
-    # For simplicity, we'll use the target_lang_code of the *first* item if multiple items are processed
-    # and a translation was requested. Otherwise, default to "en".
-    # A more robust solution might involve per-item TTS or ensuring all items have same target lang for combined TTS.
     
-    # Let's re-evaluate: target_lang_code is determined *inside* the loop for each item.
-    # The combined_text_for_audio is built from text_for_tts which might be translated.
-    # So, the language of combined_text_for_audio should match the target_lang_code if translation happened.
-    # We need the target_lang_code that was applied (if any) to the text before summarization & TTS.
-    # The current `target_lang_code` variable is from the last item in the loop.
-    # This is a slight design issue: if items have different target languages, what should global TTS language be?
-    # For now, let's assume the `target_language_choice` applies to all selected items uniformly.
-    # So the `target_lang_code` derived from `target_language_choice` (outside the loop or from the first item) is what we need.
-    
-    # Re-parsing target_language_choice for global TTS language context.
-    # This assumes target_language_choice is consistent for the batch.
     global_tts_lang_code = None
     if target_language_choice and target_language_choice != "As Source (No Translation)":
         match = re.search(r'\((.*?)\)', target_language_choice)
         if match:
             global_tts_lang_code = match.group(1)
     
-    if global_tts_lang_code:
-        language_code_for_tts = global_tts_lang_code
-        logger.info(f"Global TTS will use target language: {language_code_for_tts} (from UI selection).")
-    else:
-        language_code_for_tts = "en" # Default to English if no translation was specified
-        logger.info(f"Global TTS will use default language: {language_code_for_tts} (as 'As Source' or no valid language parsed).")
+    language_code_for_tts = global_tts_lang_code if global_tts_lang_code else "en"
+    logger.info(f"Global TTS will use language: {language_code_for_tts}.")
 
     global_tts_result = tts_generator.generate_audio(
         text_to_speak=combined_text_for_audio,
         output_filename=global_mp3_filename,
         service=tts_service,
         voice_gender=tts_voice_gender,
-        language_code=language_code_for_tts, # Pass the determined language code
-        api_key=azure_api_key_to_pass, # Used by Azure
+        language_code=language_code_for_tts,
+        api_key=azure_api_key_to_pass, 
         azure_region=azure_tts_region_cfg,
         google_credentials_path=google_tts_path_cfg,
         minimax_api_key=minimax_tts_key_cfg,
         minimax_group_id=minimax_tts_group_id_cfg
     )
 
-    output_links_markdown += "**Combined Output**:\n" # Add heading for combined files
+    output_links_markdown += "**Combined Output (from Staged Items)**:\n"
 
     if global_tts_result['success']:
         msg = f"  Global audio generated: {global_mp3_filename}"
@@ -492,19 +560,17 @@ def handle_generate_audio_subtitles(
             logger.info(msg)
             log_messages.append(msg)
 
-            # Ensure max_chars_per_segment_cfg is an int for SRT generation
             try:
                 max_chars_for_srt = int(max_chars_per_segment_cfg)
             except ValueError:
                 logger.error(f"Could not convert max_chars_per_segment_cfg '{max_chars_per_segment_cfg}' to int. Defaulting to 50 for SRT.")
                 max_chars_for_srt = 50
             
-            # Use combined_text_for_audio for subtitle generation
             global_srt_result = subtitle_generator.generate_srt(
                 text_content=combined_text_for_audio, 
                 audio_duration_seconds=global_audio_duration_seconds, 
                 output_filename=global_srt_filename,
-                max_chars_per_segment=max_chars_for_srt # Use the validated integer
+                max_chars_per_segment=max_chars_for_srt 
             )
             if global_srt_result['success']:
                 msg = f"  Global SRT generated: {global_srt_filename}"
@@ -521,7 +587,6 @@ def handle_generate_audio_subtitles(
             msg = f"  Generating global LRC subtitles for combined audio..."
             logger.info(msg)
             log_messages.append(msg)
-            # Use combined_text_for_audio for subtitle generation
             global_lrc_result = subtitle_generator.generate_lrc(combined_text_for_audio, global_audio_duration_seconds, global_lrc_filename)
             if global_lrc_result['success']:
                 msg = f"  Global LRC generated: {global_lrc_filename}"
@@ -580,67 +645,50 @@ def update_minimax_voice_dropdown(tts_service: str, target_language_str: str):
     Updates the voice dropdown choices and selected value based on the selected TTS service and target language.
     Specifically handles Minimax voices.
     """
-    voice_choices = ["female", "male"]  # Default choices
-    selected_voice = "female"       # Default selected voice
+    voice_choices = ["female", "male"] 
+    selected_voice = "female"      
 
     if tts_service == "minimax":
-        # Parse language code from target_language_str (e.g., "Chinese (zh)" -> "zh")
-        lang_code = "en" # Default language code
+        lang_code = "en" 
         if target_language_str and "(" in target_language_str and ")" in target_language_str:
             match = re.search(r'\((.*?)\)', target_language_str)
             if match:
                 parsed_code = match.group(1)
-                # Validate if the parsed code is a known language for Minimax, otherwise default might be better
-                # For now, we'll use whatever is parsed.
                 lang_code = parsed_code
-            else: # Should not happen if format is "Language (code)"
+            else: 
                 logger.warning(f"Could not parse language code from '{target_language_str}', defaulting to 'en' for Minimax voices.")
-        else: # Handle cases where target_language_str might be empty or not in expected format
+        else: 
             logger.info(f"Target language string '{target_language_str}' not in expected format for Minimax voice selection, defaulting to 'en'.")
-
 
         voices_for_lang = MINIMAX_TTS_VOICE_MAPPING.get(lang_code, {})
         
-        if voices_for_lang: # If language exists in mapping and has voices
+        if voices_for_lang: 
             voice_choices = list(voices_for_lang.keys())
             if voice_choices:
                 selected_voice = voice_choices[0]
-            else: # Language code was in mapping, but had no voices listed (empty dict)
-                voice_choices = [] # No specific voices available
-                selected_voice = None # Or handle as per Gradio's behavior for empty choices
-        else: # Language code not in MINIMAX_TTS_VOICE_MAPPING or no specific voices
-            # Fallback to default gender-based voices if no specific Minimax voices for the language
-            # Or, indicate that specific selection is not applicable.
-            # For now, if lang_code is not in mapping, let's assume generic voices are not applicable for Minimax
-            # and thus provide no choices, prompting user to select a different TTS or language.
-            # However, the requirement was "keep ['female', 'male'] if language is not in mapping at all".
-            # Let's stick to the requirement more closely.
+            else: 
+                voice_choices = [] 
+                selected_voice = None 
+        else: 
             if lang_code not in MINIMAX_TTS_VOICE_MAPPING:
-                 # Keep default ["female", "male"] if language not in mapping
-                 # This case is already handled by initialization, so no change needed here.
                  pass
-            else: # lang_code was in mapping, but voices_for_lang was empty (e.g. MINIMAX_TTS_VOICE_MAPPING.get(lang_code) returned {})
+            else: 
                 voice_choices = []
                 selected_voice = None
-
-
     return gr.update(choices=voice_choices, value=selected_voice)
 
 
 def handle_df_selection(evt: gr.SelectData, current_news_data: list):
-    # evt.index is a list of selected row indices if multiselect=True (default for interactive DF)
-    # or potentially a tuple (row, col) if a single cell is clicked.
-    # We are interested in the row indices.
     logger.debug(f"handle_df_selection: evt.index={evt.index}, evt.selected={evt.selected}, evt.value={evt.value}")
     
     selected_row_indices = []
     if evt.index is None:
         return []
 
-    if isinstance(evt.index, list): # Standard case for row selection(s)
+    if isinstance(evt.index, list): 
         selected_row_indices = evt.index
-    elif isinstance(evt.index, tuple) and len(evt.index) == 2: # Cell selection (row, col)
-        selected_row_indices = [evt.index[0]] # Take the row index
+    elif isinstance(evt.index, tuple) and len(evt.index) == 2: 
+        selected_row_indices = [evt.index[0]] 
     else:
         logger.warning(f"handle_df_selection: Unexpected evt.index format: {evt.index}")
         return []
@@ -660,9 +708,10 @@ def handle_df_selection(evt: gr.SelectData, current_news_data: list):
 with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle Generator") as app_ui:
     gr.Markdown("# News Aggregator and Audio/Subtitle Generator")
     
-    # State to hold fetched news data (list of dictionaries)
-    # This will be populated by handle_fetch_news and read by handle_generate_audio_subtitles
     news_data_state_gr = gr.State(value=[])
+    staged_news_data_state = gr.State([]) 
+    staged_df_selected_indices_state = gr.State([])
+
 
     with gr.Tabs():
         with gr.TabItem("Configuration"):
@@ -682,7 +731,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                 with gr.Column():
                     cfg_minimax_key = gr.Textbox(label="Minimax API Key (TTS)", type="password", lines=1, value=os.getenv("MINIMAX_API_KEY", ""))
                     cfg_minimax_group_id = gr.Textbox(label="Minimax Group ID (TTS)", lines=1, value=os.getenv("MINIMAX_GROUP_ID", ""))
-            # Removed the Row that contained cfg_translation_key
             
             gr.Markdown("API keys and other configurations are primarily managed via the `.env` file or environment variables. Changes made here are for the current session only unless your environment variables are updated externally.")
 
@@ -695,46 +743,33 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             news_status_log = gr.Textbox(label="Fetching Status/Log", lines=3, interactive=False)
             
             gr.Markdown("### Fetched News Items (Select rows to process)")
-            # Using pandas DataFrame for display. Selection needs to be handled.
-            # `type="pandas"` or `type="numpy"` for output format.
-            # `interactive=True` allows selection. The `select` event can be used.
             news_display_df = gr.DataFrame(
                 headers=["ID", "Title", "Summary Snippet", "Source", "Date"], 
-                # datatype=["number", "str", "str", "str", "str"], # Optional: specify datatypes
-                interactive=True, # Allows row selection
+                interactive=True, 
                 label="Fetched News"
             )
-            # How to get selected rows? The .select() event on DataFrame.
-            # It passes a SelectData object to the handler.
-            # The handler for generation will need these selected indices/items.
+            stage_button = gr.Button("Stage Selected News for Generation") 
 
-            # fetch_news_button.click( # MOVED TO END
-            #     handle_fetch_news,
-            #     inputs=[news_urls_input],
-            #     outputs=[news_display_df, news_status_log, news_data_state_gr, news_selection_checkboxes] 
-            # )
 
         with gr.TabItem("Generation Options"):
             gr.Markdown("## Generate Audio and Subtitles for Selected News")
             
-            # Component to show which items are selected (for user feedback)
-            # This is tricky with gr.DataFrame. A gr.CheckboxGroup from IDs would be easier.
-            # For now, we rely on the user remembering what they clicked in the DataFrame.
-            # Or, the handle_generate_audio_subtitles function needs to accept the selection event data.
-            
-            # selected_news_indices_input = gr.Textbox(label="Selected News Item IDs/Indices (for dev, ideally from DF selection)", lines=1, placeholder="e.g., 0,1,2 or from DF selection event") # REMOVED
+            gr.Markdown("### News Items Staged for Generation") 
+            staged_news_df = gr.DataFrame( 
+                headers=["ID", "Title", "Summary"],
+                label="Staged News Items",
+                interactive=True 
+            )
+            remove_staged_item_button = gr.Button("Remove Selected Rows from Staging Area")
 
             gen_news_topic = gr.Textbox(label="News Topic/Category (Optional, for filename)", lines=1)
-            # news_selection_checkboxes = gr.CheckboxGroup(label="Select News Items to Process", interactive=True) # REMOVED
             
             with gr.Row():
                 gen_summarizer_choice = gr.Dropdown(label="Select Summarizer", choices=["None", "ollama", "gemini", "openrouter"], value="None")
-                gen_ollama_model_name = gr.Textbox(label="Ollama Model Name (if Ollama selected)", placeholder="e.g., llama3", lines=1, visible=False) # Visibility toggle later
+                gen_ollama_model_name = gr.Textbox(label="Ollama Model Name (if Ollama selected)", placeholder="e.g., llama3", lines=1, visible=False) 
             
-            # Show Ollama model name only if Ollama is selected
             def toggle_ollama_model_visibility(summarizer_service):
                 return gr.update(visible=(summarizer_service == "ollama"))
-            # gen_summarizer_choice.change(...) MOVED TO END
 
             with gr.Row():
                 gen_target_language = gr.Dropdown(
@@ -745,96 +780,14 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
 
             with gr.Row():
                 gen_tts_service = gr.Dropdown(label="Select TTS Service", choices=["edge_tts", "azure", "google", "minimax"], value="edge_tts")
-                gen_tts_voice_gender = gr.Dropdown(label="Select Voice (or Gender for non-Minimax TTS)", choices=["female", "male"], value="female", allow_custom_value=False) # allow_custom_value=False for safety
+                gen_tts_voice_gender = gr.Dropdown(label="Select Voice (or Gender for non-Minimax TTS)", choices=["female", "male"], value="female", allow_custom_value=False) 
             
-            # Event handlers for updating the voice dropdown
-            # gen_tts_service.change(...) MOVED TO END
-            # gen_target_language.change(...) MOVED TO END
-
             gr.Markdown("### Subtitle Options")
             gen_max_chars_segment = gr.Slider(label="Max Characters per Subtitle Segment", minimum=20, maximum=150, value=50, step=5, interactive=True)
 
             generate_button = gr.Button("Generate Audio & Subtitles")
             generation_status_log = gr.Textbox(label="Generation Status/Log", lines=10, interactive=False)
-            
-            # This is where the selection from news_display_df needs to be passed.
-            # The `news_display_df.select` event can trigger a function that stores the selection in a gr.State
-            # or directly trigger the generation (might be too implicit).
-            # Let's try to pass the news_data_state_gr and handle selection indices within the Python function for now.
-            # The `selected_news_indices_input` is a manual placeholder.
-            # Proper way: news_display_df.select(fn=handle_selection_event, inputs=None, outputs=some_state_for_selected_indices)
-            # Then, generate_button.click uses that state.
-            # Simplified for now: assume `handle_generate_audio_subtitles` can get selection from `news_data_state_gr`
-            # or a dedicated selection state.
-
-            # For now, we'll pass `news_data_state_gr` and a placeholder for selected_indices.
-            # The user would have to manually input indices into `selected_news_indices_input` for this to work as-is
-            # OR we connect the `news_display_df.select` event.
-            
-            # Let's try to use the select event of the DataFrame
-            # This hidden textbox will store the selected row indices from the DataFrame
-            selected_df_indices_state = gr.State([])
-
-            # Event handler for manual text input of indices
-            # Old .submit() event wiring:
-            # selected_news_indices_input.submit(
-            #     handle_textbox_selection,
-            #     inputs=[selected_news_indices_input, news_data_state_gr],
-            #     outputs=[selected_df_indices_state]
-            # )
-
-            # New .change() event wiring:
-            # selected_news_indices_input.change( # REMOVED - This was tied to the removed Textbox
-            #     handle_textbox_selection,
-            #     inputs=[selected_news_indices_input, news_data_state_gr],
-            #     outputs=[selected_df_indices_state]
-            # )
-
-            # def handle_df_selection(evt: gr.SelectData, current_news_data: list): # REMOVED
-            #     # evt.index contains (row_index, col_index) if a cell is clicked
-            #     # If a row is selected (e.g. by clicking on the far left), evt.index might be just row_index
-            #     # We need the IDs of the items, which correspond to the 'ID' column in the displayed DF,
-            #     # or the index in the `global_news_items_store`.
-            #     # For simplicity, let's assume evt.index[0] gives the row index in the displayed DataFrame.
-            #     # This corresponds to the index in `global_news_items_store` if not sorted/filtered.
-            #     if evt.selected: # Check if selection is happening (not deselection)
-            #         # This is a simplified way to handle selection.
-            #         # If multiple rows can be selected, evt.index might be a list of indices.
-            #         # For single row selection:
-            #         row_index = evt.index[0]
-            #         if 0 <= row_index < len(current_news_data):
-            #             # Store the actual item or its ID. Storing ID is safer.
-            #             selected_id = current_news_data[row_index]['id']
-            #             # For multiple selections, this needs to accumulate.
-            #             # This example just takes the latest single selection.
-            #             # A proper multi-select would require a gr.CheckboxGroup or more complex state management.
-            #             # For now, let's assume we want to process the item corresponding to the clicked row index.
-            #             # This is a placeholder for robust multi-selection.
-            #             # return [current_news_data[row_index]] # Return list with the single selected item
-            #             return [row_index] # Return the index in the global_news_items_store
-            #         else:
-            #             return []
-            #     return [] # No selection or deselection
-
-            # news_display_df.select( # REMOVED
-            #     handle_df_selection, 
-            #     inputs=[news_data_state_gr], 
-            #     outputs=[selected_df_indices_state] # Store selected indices here
-            # )
-            
-            # def handle_checkbox_selection(selected_item_ids: list): # REMOVED
-            #     """
-            #     Handles the change in checkbox selection.
-            #     The input `selected_item_ids` is a list of IDs of the items checked by the user.
-            #     These IDs correspond to `processed_item['id']`.
-            #     """
-            #     logger.debug(f"handle_checkbox_selection: selected_item_ids={selected_item_ids}, type={type(selected_item_ids)}")
-            #     # The selected_item_ids are the actual values (item IDs) we want to store.
-            #     # These are already the indices/IDs that handle_generate_audio_subtitles expects.
-            #     return selected_item_ids
-
-            # news_selection_checkboxes.change(...) MOVED TO END
-            # generate_button.click(...) MOVED TO END
+            # selected_df_indices_state = gr.State([]) # REMOVED: This was redundant. The one at the app_ui scope is used.
 
         with gr.TabItem("Results / Output"):
             gr.Markdown("## Generated Files")
@@ -844,7 +797,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
     fetch_news_button.click(
         handle_fetch_news,
         inputs=[news_urls_input],
-        outputs=[news_display_df, news_status_log, news_data_state_gr] # Reverted
+        outputs=[news_display_df, news_status_log, news_data_state_gr] 
     )
     
     gen_summarizer_choice.change(
@@ -864,41 +817,52 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
         inputs=[gen_tts_service, gen_target_language],
         outputs=[gen_tts_voice_gender]
     )
+
+    stage_button.click(
+        fn=handle_stage_selected_news,
+        inputs=[selected_df_indices_state, news_data_state_gr], # Uses selection from main DF
+        outputs=[staged_news_data_state, staged_news_df]
+    )
+
+    staged_news_df.select( # Selection event for the STAGED DataFrame
+        fn=handle_staged_df_selection,
+        inputs=None, 
+        outputs=[staged_df_selected_indices_state] # Outputs to its own state
+    )
+
+    remove_staged_item_button.click(
+        fn=handle_remove_staged_items,
+        inputs=[staged_df_selected_indices_state, staged_news_data_state],
+        outputs=[staged_news_data_state, staged_news_df]
+    )
+
+    staged_news_df.input(
+        fn=handle_edit_staged_news,
+        inputs=[staged_news_df, staged_news_data_state],
+        outputs=[staged_news_data_state]
+    )
     
-    # news_selection_checkboxes.change( # REMOVED
-    #     fn=handle_checkbox_selection,
-    #     inputs=[news_selection_checkboxes],
-    #     outputs=[selected_df_indices_state]
-    # )
-    
-    news_display_df.select(
+    news_display_df.select( # Selection event for the MAIN DataFrame
         fn=handle_df_selection,
         inputs=[news_data_state_gr], 
-        outputs=[selected_df_indices_state]
+        outputs=[selected_df_indices_state] # Outputs to the main selection state
     )
     
     generate_button.click(
         handle_generate_audio_subtitles,
         inputs=[
-            selected_df_indices_state, # Selected item indices from CheckboxGroup/State
-            news_data_state_gr,         # Full list of fetched news items
+            staged_news_data_state, # This is passed to the 'news_data_state' parameter of the function
             gen_news_topic,
-            gen_summarizer_choice, gen_ollama_model_name, cfg_ollama_url, # Summarizer
-            cfg_gemini_key, cfg_openrouter_key,                         # Summarizer APIs
-            gen_tts_service, gen_tts_voice_gender,                      # TTS
-            gen_max_chars_segment,                                      # Subtitle option
-            cfg_azure_tts_key, cfg_azure_tts_region,                    # TTS APIs
-            cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id, # TTS APIs
-            gen_target_language                                         # Target Language
+            gen_summarizer_choice, gen_ollama_model_name, cfg_ollama_url, 
+            cfg_gemini_key, cfg_openrouter_key,                         
+            gen_tts_service, gen_tts_voice_gender,                      
+            gen_max_chars_segment,                                      
+            cfg_azure_tts_key, cfg_azure_tts_region,                    
+            cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id, 
+            gen_target_language                                         
         ],
-        outputs=[generation_status_log, results_display_markdown] # Updated to target existing results_display_markdown
+        outputs=[generation_status_log, results_display_markdown] 
     )
 
 if __name__ == "__main__":
-    # Setting share=True is useful for testing in environments like Gitpod or Colab
-    # but might require `ffmpy` and `ffmpeg` for some audio operations if not already installed.
-    # For local execution, share=False is fine.
     app_ui.launch(debug=True, share=False, allowed_paths=[OUTPUT_DIR])
-    # To make files in OUTPUT_DIR accessible via markdown links like `./file=path/to/file.mp3`,
-    # Gradio needs to be aware of this directory. `allowed_paths` is one way.
-    # The `./file=` prefix is a Gradio convention for serving local files.
