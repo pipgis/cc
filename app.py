@@ -91,13 +91,13 @@ def handle_fetch_news(urls_text_input):
     if not urls_text_input or not urls_text_input.strip():
         msg = "Status: Please enter some URLs or RSS feed links."
         logger.warning(msg)
-        return pd.DataFrame(), msg, []
+        return pd.DataFrame(), msg, [], gr.update(choices=[], value=[])
 
     sources = [url.strip() for url in urls_text_input.strip().split('\n') if url.strip()]
     if not sources:
         msg = "Status: No valid URLs provided."
         logger.warning(msg)
-        return pd.DataFrame(), msg, []
+        return pd.DataFrame(), msg, [], gr.update(choices=[], value=[])
     
     msg = f"Fetching news from {len(sources)} source(s)..."
     logger.info(msg)
@@ -109,18 +109,19 @@ def handle_fetch_news(urls_text_input):
         msg = f"An error occurred during fetching: {e}"
         logger.exception("Exception during news fetching:") # Logs error with stack trace
         status_messages.append(msg)
-        return pd.DataFrame(), "\n".join(status_messages), []
+        return pd.DataFrame(), "\n".join(status_messages), [], gr.update(choices=[], value=[])
 
     # Clear previous items and add new ones with an ID
     global_news_items_store = []
     valid_items_for_df = []
+    checkbox_choices = [] # Initialize checkbox_choices
     item_id_counter = 0
 
     if not fetched_items_raw:
         msg = "No items were fetched. Check URLs and network."
         logger.info(msg)
         status_messages.append(msg)
-        return pd.DataFrame(), "\n".join(status_messages), []
+        return pd.DataFrame(), "\n".join(status_messages), [], gr.update(choices=[], value=[])
 
     for item in fetched_items_raw:
         if item.get('error'):
@@ -136,9 +137,10 @@ def handle_fetch_news(urls_text_input):
             'source_url': item.get('source_url', 'N/A'),
             'published_date': item.get('published_date', 'N/A'),
             '_full_summary': item.get('summary', 'N/A'), 
-            '_original_title': item.get('title', 'N/A') 
+            '_original_title': item.get('title', 'N/A')
         }
         global_news_items_store.append(processed_item)
+        checkbox_choices.append((processed_item['title'], processed_item['id'])) # Populate checkbox_choices
         valid_items_for_df.append({
             "ID": item_id_counter,
             "Title": processed_item['title'],
@@ -157,10 +159,12 @@ def handle_fetch_news(urls_text_input):
         msg = "No valid news items could be processed into the display table."
         logger.info(msg)
         status_messages.append(msg)
+        # Ensure checkbox_choices is empty if no valid items
+        checkbox_choices = [] 
     else:
         news_df = pd.DataFrame(valid_items_for_df)
 
-    return news_df, "\n".join(status_messages), global_news_items_store
+    return news_df, "\n".join(status_messages), global_news_items_store, gr.update(choices=checkbox_choices, value=[])
 
 
 def handle_generate_audio_subtitles(
@@ -189,7 +193,8 @@ def handle_generate_audio_subtitles(
     consolidated_selected_news_data = [] # For storing data of selected items for JSON export
     combined_text_for_audio = ""
 
-    if not selected_indices:
+    # selected_indices now contains item IDs from the CheckboxGroup
+    if not selected_indices: 
         msg = "No news items selected for generation."
         logger.warning(msg)
         log_messages.append(msg)
@@ -197,29 +202,35 @@ def handle_generate_audio_subtitles(
     
     actual_selected_items = []
     if isinstance(selected_indices, list):
-        for index in selected_indices:
-            if 0 <= index < len(news_data_state):
-                actual_selected_items.append(news_data_state[index])
-            else:
-                msg = f"Warning: Invalid selected index {index} ignored."
-                logger.warning(msg)
-                log_messages.append(msg)
-    else:
-        msg = "Selection format not as expected. Please select rows in the table."
-        logger.warning(msg)
-        log_messages.append(msg)
-        if not news_data_state:
-            msg = "News data is empty. Fetch news first."
-            logger.error(msg) # Changed to error as it's a prerequisite
-            log_messages.append(msg)
-            return "\n".join(log_messages), ""
-        if not actual_selected_items and news_data_state: # Fallback logic
-            msg = "Warning: No specific items selected or selection mechanism not fully wired. Processing first item as a fallback for testing."
+        # news_data_state is global_news_items_store, which is a list of dicts, each with an 'id'
+        # selected_indices is a list of IDs that the user has checked.
+        ids_to_find = set(selected_indices) # Use a set for efficient lookup
+        
+        # Create a mapping from ID to item for quick retrieval and to preserve order if needed,
+        # though order of selection might not be strictly preserved by CheckboxGroup's output.
+        # For this loop, simple iteration over news_data_state is fine.
+        for item in news_data_state:
+            if item['id'] in ids_to_find:
+                actual_selected_items.append(item)
+                # Optional: Remove found ID to handle potential duplicates in news_data_state, though IDs should be unique
+                # ids_to_find.remove(item['id']) 
+                # if not ids_to_find: break # Optimization: stop if all selected IDs are found
+        
+        if not actual_selected_items:
+            msg = "Selected item IDs not found in news data. This could indicate a state mismatch."
             logger.warning(msg)
             log_messages.append(msg)
-            actual_selected_items.append(news_data_state[0])
+            return "\n".join(log_messages), ""
+            
+    else: # Should not happen if CheckboxGroup is correctly wired
+        msg = "Selection format not as expected. Expected a list of item IDs."
+        logger.error(msg) # Changed to error as this implies an internal issue
+        log_messages.append(msg)
+        return "\n".join(log_messages), ""
 
-    if not actual_selected_items:
+    # This check is effectively duplicated if the above block for empty actual_selected_items runs.
+    # However, keeping it as a safeguard.
+    if not actual_selected_items: 
         msg = "No news items to process after selection logic."
         logger.warning(msg)
         log_messages.append(msg)
@@ -684,7 +695,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             fetch_news_button.click(
                 handle_fetch_news,
                 inputs=[news_urls_input],
-                outputs=[news_display_df, news_status_log, news_data_state_gr] # Update DataFrame, log, and the shared state
+                outputs=[news_display_df, news_status_log, news_data_state_gr, news_selection_checkboxes] # Update DataFrame, log, shared state, and checkboxes
             )
 
         with gr.TabItem("Generation Options"):
@@ -695,10 +706,10 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             # For now, we rely on the user remembering what they clicked in the DataFrame.
             # Or, the handle_generate_audio_subtitles function needs to accept the selection event data.
             
-            selected_news_indices_input = gr.Textbox(label="Selected News Item IDs/Indices (for dev, ideally from DF selection)", lines=1, placeholder="e.g., 0,1,2 or from DF selection event")
-
+            # selected_news_indices_input = gr.Textbox(label="Selected News Item IDs/Indices (for dev, ideally from DF selection)", lines=1, placeholder="e.g., 0,1,2 or from DF selection event") # REMOVED
 
             gen_news_topic = gr.Textbox(label="News Topic/Category (Optional, for filename)", lines=1)
+            news_selection_checkboxes = gr.CheckboxGroup(label="Select News Items to Process", interactive=True) # ADDED
             
             with gr.Row():
                 gen_summarizer_choice = gr.Dropdown(label="Select Summarizer", choices=["None", "ollama", "gemini", "openrouter"], value="None")
@@ -765,44 +776,60 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             # )
 
             # New .change() event wiring:
-            selected_news_indices_input.change(
-                handle_textbox_selection,
-                inputs=[selected_news_indices_input, news_data_state_gr],
+            # selected_news_indices_input.change( # REMOVED - This was tied to the removed Textbox
+            #     handle_textbox_selection,
+            #     inputs=[selected_news_indices_input, news_data_state_gr],
+            #     outputs=[selected_df_indices_state]
+            # )
+
+            # def handle_df_selection(evt: gr.SelectData, current_news_data: list): # REMOVED
+            #     # evt.index contains (row_index, col_index) if a cell is clicked
+            #     # If a row is selected (e.g. by clicking on the far left), evt.index might be just row_index
+            #     # We need the IDs of the items, which correspond to the 'ID' column in the displayed DF,
+            #     # or the index in the `global_news_items_store`.
+            #     # For simplicity, let's assume evt.index[0] gives the row index in the displayed DataFrame.
+            #     # This corresponds to the index in `global_news_items_store` if not sorted/filtered.
+            #     if evt.selected: # Check if selection is happening (not deselection)
+            #         # This is a simplified way to handle selection.
+            #         # If multiple rows can be selected, evt.index might be a list of indices.
+            #         # For single row selection:
+            #         row_index = evt.index[0]
+            #         if 0 <= row_index < len(current_news_data):
+            #             # Store the actual item or its ID. Storing ID is safer.
+            #             selected_id = current_news_data[row_index]['id']
+            #             # For multiple selections, this needs to accumulate.
+            #             # This example just takes the latest single selection.
+            #             # A proper multi-select would require a gr.CheckboxGroup or more complex state management.
+            #             # For now, let's assume we want to process the item corresponding to the clicked row index.
+            #             # This is a placeholder for robust multi-selection.
+            #             # return [current_news_data[row_index]] # Return list with the single selected item
+            #             return [row_index] # Return the index in the global_news_items_store
+            #         else:
+            #             return []
+            #     return [] # No selection or deselection
+
+            # news_display_df.select( # REMOVED
+            #     handle_df_selection, 
+            #     inputs=[news_data_state_gr], 
+            #     outputs=[selected_df_indices_state] # Store selected indices here
+            # )
+            
+            def handle_checkbox_selection(selected_item_ids: list):
+                """
+                Handles the change in checkbox selection.
+                The input `selected_item_ids` is a list of IDs of the items checked by the user.
+                These IDs correspond to `processed_item['id']`.
+                """
+                logger.debug(f"handle_checkbox_selection: selected_item_ids={selected_item_ids}, type={type(selected_item_ids)}")
+                # The selected_item_ids are the actual values (item IDs) we want to store.
+                # These are already the indices/IDs that handle_generate_audio_subtitles expects.
+                return selected_item_ids
+
+            news_selection_checkboxes.change(
+                fn=handle_checkbox_selection,
+                inputs=[news_selection_checkboxes],
                 outputs=[selected_df_indices_state]
             )
-
-            def handle_df_selection(evt: gr.SelectData, current_news_data: list):
-                # evt.index contains (row_index, col_index) if a cell is clicked
-                # If a row is selected (e.g. by clicking on the far left), evt.index might be just row_index
-                # We need the IDs of the items, which correspond to the 'ID' column in the displayed DF,
-                # or the index in the `global_news_items_store`.
-                # For simplicity, let's assume evt.index[0] gives the row index in the displayed DataFrame.
-                # This corresponds to the index in `global_news_items_store` if not sorted/filtered.
-                if evt.selected: # Check if selection is happening (not deselection)
-                    # This is a simplified way to handle selection.
-                    # If multiple rows can be selected, evt.index might be a list of indices.
-                    # For single row selection:
-                    row_index = evt.index[0]
-                    if 0 <= row_index < len(current_news_data):
-                        # Store the actual item or its ID. Storing ID is safer.
-                        selected_id = current_news_data[row_index]['id']
-                        # For multiple selections, this needs to accumulate.
-                        # This example just takes the latest single selection.
-                        # A proper multi-select would require a gr.CheckboxGroup or more complex state management.
-                        # For now, let's assume we want to process the item corresponding to the clicked row index.
-                        # This is a placeholder for robust multi-selection.
-                        # return [current_news_data[row_index]] # Return list with the single selected item
-                        return [row_index] # Return the index in the global_news_items_store
-                    else:
-                        return []
-                return [] # No selection or deselection
-
-            news_display_df.select(
-                handle_df_selection, 
-                inputs=[news_data_state_gr], 
-                outputs=[selected_df_indices_state] # Store selected indices here
-            )
-
 
             generate_button.click(
                 handle_generate_audio_subtitles,
