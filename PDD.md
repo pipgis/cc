@@ -39,10 +39,10 @@
             *   Utilizes the `speech-02-turbo` model for generation.
             *   The default voice is "male-qn-qingse". *Note: When Minimax TTS is selected, the 'Select Voice (or Gender for non-Minimax TTS)' dropdown dynamically populates with a list of available Minimax-specific voices based on the chosen 'Target Language'. This allows users to select from a variety of voices (e.g., 'female_yujie', 'badao_shaoye' for Chinese) provided in the `MINIMAX_TTS_VOICE_MAPPING`. If a language is chosen for which no specific Minimax voices are mapped, or if a non-Minimax TTS service is selected, the dropdown defaults to generic 'female'/'male' options (where applicable to the TTS service).*
             *   Generates audio in MP3 format (32000 Hz sample rate, 128 kbps bitrate, mono channel, as per current implementation defaults).
-    *   Output filenames will follow the convention: `YYYYMMDDHHMMSS_Topic_News.extension` (e.g., `20231027103000_AI_News.mp3`). If no topic is specified, it will be `YYYYMMDDHHMMSS_News.extension`.
+    *   When processing selected news items, a single combined audio file is generated. Its filename will follow the convention: `YYYYMMDDHHMMSS_Topic_Combined_News.extension` (e.g., `20231027103000_AI_Combined_News.mp3`). If no topic is specified, it will be `YYYYMMDDHHMMSS_Combined_News.extension`.
 *   **Subtitle Generation:**
     *   Formats: SRT (.srt) and LRC (.lrc).
-    *   Synchronization: Based on generated audio.
+    *   Synchronization: Based on the single combined audio file generated from the selected news items.
 *   **User Interface (Gradio):**
     *   Input fields for news sources (URLs, RSS feeds).
     *   Configuration options for summarization (model selection, API keys).
@@ -104,11 +104,8 @@
     *   Button: "Generate Audio & Subtitles for Selected News".
 *   **Tab 4: Results / Output**
     *   Display area showing progress/status of generation.
-    *   List of generated content: News Title, Download MP3, Download SRT, Download LRC.
-    *   **Note on Intermediate Files:** Additionally, for each processed news item, the system saves intermediate text files to the `generated_files/` output directory:
-        *   `[filename_base]_original_content.txt`: Contains the full text content (title + summary) of the selected news item before any summarization is applied. This is the text used as input if summarization is chosen.
-        *   `[filename_base]_summarized_content.txt`: Contains the text content after summarization has been applied. This file is created only if summarization is used for the item. This summarized text then becomes the input for the TTS stage.
-        These files can be useful for reviewing the exact text input to the TTS stage or for debugging purposes. The `[filename_base]` corresponds to the one used for the MP3/SRT/LRC files.
+    *   *Generated content from selected news items (combined): Download Combined MP3, Download Combined SRT, Download Combined LRC.*
+    *   **Note on Data Records:** For each selected news item, its original and (if generated) summarized English text, along with any translated text, are stored in a consolidated JSON file (e.g., `consolidated_selected_news_YYYYMMDDHHMMSS.json`). The text content from all selected items (after potential summarization and translation) is then concatenated to form a single input for the TTS stage, resulting in one combined audio file. The intermediate text files (`_original_content.txt`, `_summarized_content.txt`) mentioned previously are conceptual representations of the data captured in the JSON and used for the combined TTS input, rather than individual files saved to disk for each item during the main audio generation flow.
 
 ## 6. Error Handling & User Feedback
 
