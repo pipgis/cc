@@ -37,7 +37,7 @@
             *   Requires user API key and Group ID (configured via `.env`).
             *   Accessed via an HTTP streaming interface.
             *   Utilizes the `speech-02-turbo` model for generation.
-            *   The default voice is "male-qn-qingse". *Note: The UI's 'Select Voice Gender' option does not currently change the Minimax voice; the default 'male-qn-qingse' is used.*
+            *   The default voice is "male-qn-qingse". *Note: When Minimax TTS is selected, the 'Select Voice (or Gender for non-Minimax TTS)' dropdown dynamically populates with a list of available Minimax-specific voices based on the chosen 'Target Language'. This allows users to select from a variety of voices (e.g., 'female_yujie', 'badao_shaoye' for Chinese) provided in the `MINIMAX_TTS_VOICE_MAPPING`. If a language is chosen for which no specific Minimax voices are mapped, or if a non-Minimax TTS service is selected, the dropdown defaults to generic 'female'/'male' options (where applicable to the TTS service).*
             *   Generates audio in MP3 format (32000 Hz sample rate, 128 kbps bitrate, mono channel, as per current implementation defaults).
     *   Output filenames will follow the convention: `YYYYMMDDHHMMSS_Topic_News.extension` (e.g., `20231027103000_AI_News.mp3`). If no topic is specified, it will be `YYYYMMDDHHMMSS_News.extension`.
 *   **Subtitle Generation:**
