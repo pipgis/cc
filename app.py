@@ -711,6 +711,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
     news_data_state_gr = gr.State(value=[])
     staged_news_data_state = gr.State([]) 
     staged_df_selected_indices_state = gr.State([])
+    selected_df_indices_state = gr.State([]) # RE-ADDED: For main DataFrame selection
 
 
     with gr.Tabs():
