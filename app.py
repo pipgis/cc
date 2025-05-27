@@ -114,14 +114,16 @@ def handle_fetch_news(urls_text_input):
 
     # Clear previous items and add new ones with an ID
     global_news_items_store = []
-    valid_items_for_df = []
+    # valid_items_for_df is no longer used to create the returned DataFrame directly.
     item_id_counter = 0
 
     if not fetched_items_raw:
         msg = "No items were fetched. Check URLs and network."
         logger.info(msg)
         status_messages.append(msg)
-        return pd.DataFrame(), "\n".join(status_messages), []
+        # global_news_items_store remains empty
+        styled_df_output = update_and_style_news_df(global_news_items_store, []) 
+        return styled_df_output, "\n".join(status_messages), global_news_items_store # global_news_items_store is []
 
     for item in fetched_items_raw:
         if item.get('error'):
@@ -131,37 +133,29 @@ def handle_fetch_news(urls_text_input):
             continue
 
         processed_item = {
-            'id': item_id_counter,
+            'id': item_id_counter, # This is the internal ID, corresponds to DataFrame index if no sorting/filtering
             'title': item.get('title', 'N/A'),
-            'summary': item.get('summary', 'N/A')[:150] + "..." if item.get('summary') else 'N/A', # Truncate summary
+            'summary': item.get('summary', 'N/A')[:150] + "..." if item.get('summary') else 'N/A', # Truncate summary for the 'summary' field
             'source_url': item.get('source_url', 'N/A'),
             'published_date': item.get('published_date', 'N/A'),
             '_full_summary': item.get('summary', 'N/A'), 
             '_original_title': item.get('title', 'N/A')
         }
         global_news_items_store.append(processed_item)
-        valid_items_for_df.append({
-            "ID": item_id_counter,
-            "Title": processed_item['title'],
-            "Summary Snippet": processed_item['summary'],
-            "Source": processed_item['source_url'],
-            "Date": processed_item['published_date']
-        })
         item_id_counter += 1
         
-    msg = f"Fetched {len(valid_items_for_df)} valid news items."
+    msg = f"Fetched and processed {len(global_news_items_store)} news items into the application's internal store."
+    if not global_news_items_store: # if all items had errors
+        msg += " No valid items were available after filtering errors."
     logger.info(msg)
     status_messages.append(msg)
     
-    if not valid_items_for_df:
-        news_df = pd.DataFrame()
-        msg = "No valid news items could be processed into the display table."
-        logger.info(msg)
-        status_messages.append(msg)
-    else:
-        news_df = pd.DataFrame(valid_items_for_df)
+    # Now, global_news_items_store is populated (or empty if all had errors).
+    # Create the styled DataFrame for display. Initially, no rows are selected.
+    styled_df_output = update_and_style_news_df(global_news_items_store, [])
 
-    return news_df, "\n".join(status_messages), global_news_items_store
+    # Return: styled DataFrame, status messages, updated global store, and cleared selected indices
+    return styled_df_output, "\n".join(status_messages), global_news_items_store, []
 
 
 def handle_stage_selected_news(selected_indices, all_news_items):
@@ -704,6 +698,62 @@ def handle_df_selection(evt: gr.SelectData, current_news_data: list):
     return valid_indices
 
 
+def update_and_style_news_df(news_items_list: list, selected_indices: list):
+    """
+    Converts a list of news item dictionaries (from global_news_items_store format)
+    to a Pandas DataFrame with specific display columns ("ID", "Title", "Summary Snippet", "Source", "Date"),
+    applies styling to highlight selected rows, and returns the styled DataFrame (Pandas Styler object).
+    """
+    if news_items_list is None:
+        news_items_list = []
+
+    if not news_items_list:
+        logger.debug("update_and_style_news_df: news_items_list is empty. Returning empty styled DataFrame.")
+        return pd.DataFrame(columns=["ID", "Title", "Summary Snippet", "Source", "Date"]).style
+
+    df_display_data = []
+    for item_dict in news_items_list: # item_dict is from global_news_items_store
+        df_display_data.append({
+            "ID": item_dict.get('id', 'N/A'),
+            "Title": item_dict.get('title', 'N/A'),
+            "Summary Snippet": item_dict.get('summary', 'N/A'), # 'summary' in global_news_items_store is already truncated
+            "Source": item_dict.get('source_url', 'N/A'),
+            "Date": item_dict.get('published_date', 'N/A')
+        })
+
+    df = pd.DataFrame(df_display_data)
+
+    if df.empty:
+        logger.debug("update_and_style_news_df: DataFrame is empty after processing. Returning empty styled DataFrame.")
+        return pd.DataFrame(columns=["ID", "Title", "Summary Snippet", "Source", "Date"]).style
+
+    def highlight_selected(row):
+        if row.name in selected_indices: # row.name is the DataFrame index
+            return ['background-color: yellow'] * len(row)
+        return [''] * len(row)
+
+    logger.debug(f"update_and_style_news_df: Applying styling for selected_indices: {selected_indices} on DF with {len(df)} rows.")
+    styled_df = df.style.apply(highlight_selected, axis=1)
+    return styled_df
+
+
+def handle_news_selection_and_styling(evt: gr.SelectData, current_news_items_list: list):
+    """
+    Handles the selection event from the news_display_df.
+    `current_news_items_list` is the content of `news_data_state_gr` (i.e., global_news_items_store).
+    Determines selected indices and returns the updated list of selected indices and the re-styled DataFrame.
+    """
+    effective_current_news_list = current_news_items_list if current_news_items_list is not None else []
+    logger.debug(f"handle_news_selection_and_styling: Event: {evt}, current_news_items_list count: {len(effective_current_news_list)}")
+
+    newly_selected_indices = handle_df_selection(evt, effective_current_news_list)
+    logger.debug(f"handle_news_selection_and_styling: newly_selected_indices from handle_df_selection: {newly_selected_indices}")
+
+    styled_df = update_and_style_news_df(effective_current_news_list, newly_selected_indices)
+
+    return newly_selected_indices, styled_df
+
+
 # --- Gradio UI Definition ---
 with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle Generator") as app_ui:
     gr.Markdown("# News Aggregator and Audio/Subtitle Generator")
@@ -798,7 +848,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
     fetch_news_button.click(
         handle_fetch_news,
         inputs=[news_urls_input],
-        outputs=[news_display_df, news_status_log, news_data_state_gr] 
+        outputs=[news_display_df, news_status_log, news_data_state_gr, selected_df_indices_state]  # Added selected_df_indices_state
     )
     
     gen_summarizer_choice.change(
@@ -842,11 +892,11 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
         inputs=[staged_news_df, staged_news_data_state],
         outputs=[staged_news_data_state]
     )
-    
-    news_display_df.select( # Selection event for the MAIN DataFrame
-        fn=handle_df_selection,
-        inputs=[news_data_state_gr], 
-        outputs=[selected_df_indices_state] # Outputs to the main selection state
+
+    news_display_df.select(
+        fn=handle_news_selection_and_styling,      # New handler
+        inputs=[news_data_state_gr],              # Pass `global_news_items_store` via `news_data_state_gr`
+        outputs=[selected_df_indices_state, news_display_df] # Update selected indices state and the DataFrame display
     )
     
     generate_button.click(
