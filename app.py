@@ -640,7 +640,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
     with gr.Tabs():
         with gr.TabItem("Configuration"):
             gr.Markdown("## API Keys and Service Configuration")
-            gr.Markdown("Values are loaded from `.env` file if present, or can be manually entered. Click 'Save Configuration' to persist current UI values to `app_config.json` (for review or backup, not primary loading).")
+            gr.Markdown("Values are loaded from the `.env` file if present at startup, or can be manually entered for the current session. API keys and other configurations are primarily managed via the `.env` file. Changes made to configuration values in this UI are for the current session only and will not be saved.")
             with gr.Row():
                 with gr.Column():
                     cfg_gemini_key = gr.Textbox(label="Google Gemini API Key", type="password", lines=1, value=os.getenv("GEMINI_API_KEY", ""))
