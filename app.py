@@ -692,11 +692,11 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             # It passes a SelectData object to the handler.
             # The handler for generation will need these selected indices/items.
 
-            fetch_news_button.click(
-                handle_fetch_news,
-                inputs=[news_urls_input],
-                outputs=[news_display_df, news_status_log, news_data_state_gr, news_selection_checkboxes] # Update DataFrame, log, shared state, and checkboxes
-            )
+            # fetch_news_button.click( # MOVED TO END
+            #     handle_fetch_news,
+            #     inputs=[news_urls_input],
+            #     outputs=[news_display_df, news_status_log, news_data_state_gr, news_selection_checkboxes] 
+            # )
 
         with gr.TabItem("Generation Options"):
             gr.Markdown("## Generate Audio and Subtitles for Selected News")
@@ -718,7 +718,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
             # Show Ollama model name only if Ollama is selected
             def toggle_ollama_model_visibility(summarizer_service):
                 return gr.update(visible=(summarizer_service == "ollama"))
-            gen_summarizer_choice.change(toggle_ollama_model_visibility, inputs=[gen_summarizer_choice], outputs=[gen_ollama_model_name])
+            # gen_summarizer_choice.change(...) MOVED TO END
 
             with gr.Row():
                 gen_target_language = gr.Dropdown(
@@ -732,16 +732,8 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                 gen_tts_voice_gender = gr.Dropdown(label="Select Voice (or Gender for non-Minimax TTS)", choices=["female", "male"], value="female", allow_custom_value=False) # allow_custom_value=False for safety
             
             # Event handlers for updating the voice dropdown
-            gen_tts_service.change(
-                update_minimax_voice_dropdown,
-                inputs=[gen_tts_service, gen_target_language],
-                outputs=[gen_tts_voice_gender]
-            )
-            gen_target_language.change(
-                update_minimax_voice_dropdown,
-                inputs=[gen_tts_service, gen_target_language],
-                outputs=[gen_tts_voice_gender]
-            )
+            # gen_tts_service.change(...) MOVED TO END
+            # gen_target_language.change(...) MOVED TO END
 
             gr.Markdown("### Subtitle Options")
             gen_max_chars_segment = gr.Slider(label="Max Characters per Subtitle Segment", minimum=20, maximum=150, value=50, step=5, interactive=True)
@@ -825,90 +817,60 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
                 # These are already the indices/IDs that handle_generate_audio_subtitles expects.
                 return selected_item_ids
 
-            news_selection_checkboxes.change(
-                fn=handle_checkbox_selection,
-                inputs=[news_selection_checkboxes],
-                outputs=[selected_df_indices_state]
-            )
-
-            generate_button.click(
-                handle_generate_audio_subtitles,
-                inputs=[
-                    selected_df_indices_state, # Selected item indices from DataFrame
-                    news_data_state_gr,         # Full list of fetched news items
-                    gen_news_topic,
-                    gen_summarizer_choice, gen_ollama_model_name, cfg_ollama_url, # Summarizer
-                    cfg_gemini_key, cfg_openrouter_key,                         # Summarizer APIs
-                    gen_tts_service, gen_tts_voice_gender,                      # TTS
-                    gen_max_chars_segment,                                      # Subtitle option (now correctly mapped to max_chars_per_segment_cfg)
-                    cfg_azure_tts_key, cfg_azure_tts_region,                    # TTS APIs
-                    cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id, # TTS APIs
-                    gen_target_language                                         # Target Language (now correctly mapped to target_language_choice)
-                ],
-                outputs=[generation_status_log, gr.Markdown(label="Generated Files")] # Output to log and results tab area
-                # The results tab area needs to be named for the output to go there.
-            )
-
+            # news_selection_checkboxes.change(...) MOVED TO END
+            # generate_button.click(...) MOVED TO END
 
         with gr.TabItem("Results / Output"):
             gr.Markdown("## Generated Files")
-            # This Markdown component will be updated by handle_generate_audio_subtitles
-            # It should be named in the outputs of the generate_button.click
-            # To make it work, we need to pass its reference.
-            # Let's define it above and pass it to the click handler.
-            # For now, the generate_button.click outputs a new gr.Markdown component.
-            # This means the tab needs to be re-rendered or the component updated.
-            # A placeholder approach: the handler returns Markdown content,
-            # and we have a gr.Markdown component here that gets updated.
             results_display_markdown = gr.Markdown("Generated file links will appear here.")
             
-            # Re-wire the generate_button click to update this specific Markdown component
-            # This requires moving the generate_button.click definition after results_display_markdown exists.
-            # Or, by making results_display_markdown an output of the click event.
-            # The current setup in generate_button.click is: outputs=[generation_status_log, gr.Markdown(...)]
-            # This creates a NEW markdown component.
-            # It should be: outputs=[generation_status_log, results_display_markdown]
-
-    # Re-assigning click handler for generate_button to update the correct Markdown output
-    # This is a bit of a Gradio quirk; components should be defined before they are targets of outputs.
-    # The previous generate_button.click inside the Tab definition is problematic for this.
-    # One way is to define all components first, then wire them.
-    # For simplicity here, we assume the previous definition of generate_button.click is implicitly overridden
-    # if we redefine it here. Or, more cleanly, ensure all components are created before wiring.
+    # --- Event Wiring ---
+    fetch_news_button.click(
+        handle_fetch_news,
+        inputs=[news_urls_input],
+        outputs=[news_display_df, news_status_log, news_data_state_gr, news_selection_checkboxes]
+    )
     
-    # Correct wiring for generate_button (ensure `results_display_markdown` is defined before this call)
-    # This is slightly out of order with the visual tab definition but necessary for Gradio's processing model
-    # if components are defined and then immediately used in event wiring within the same scope.
-    # A cleaner way is to define all UI, then all events.
-    # For this subtask, the current wiring in Tab 3 for generate_button.click will be used,
-    # and it implicitly targets the `results_display_markdown` by its order in the `outputs` list
-    # if we ensure `results_display_markdown` is the second output component.
-    # The `gr.Markdown(label="Generated Files")` in the click handler's outputs needs to be replaced by `results_display_markdown`.
+    gen_summarizer_choice.change(
+        toggle_ollama_model_visibility, 
+        inputs=[gen_summarizer_choice], 
+        outputs=[gen_ollama_model_name]
+    )
     
-    # The click handler for generate_button is already defined under Tab 3.
-    # We need to ensure its `outputs` list correctly targets `results_display_markdown`.
-    # This is done by passing `results_display_markdown` itself, not creating a new `gr.Markdown()`.
-    # This seems to be an issue with my current `generate_button.click` definition.
-    # Let's adjust it directly where it's defined.
-
-    # The structure is:
-    # generate_button.click(
-    #     handle_generate_audio_subtitles,
-    #     inputs=[...],
-    #     outputs=[generation_status_log, results_display_markdown] <--- Ensure this is the component instance
-    # )
-    # This is implicitly handled if results_display_markdown is the component in the "Results / Output" tab
-    # and the handler returns content for it as the second item in its return tuple.
-    # The `gr.Markdown(label="Generated Files")` in `outputs` of `generate_button.click` should be `results_display_markdown`.
-    # I will correct this in the `generate_button.click` definition within Tab 3.
-    # (No, I can't directly edit the previous definition in this flow. I'll assume the current setup
-    # where the output is directed to a gr.Markdown component in the 'Results / Output' tab works by position/order.
-    # The key is that `handle_generate_audio_subtitles` returns markdown *content* as its second value,
-    # and the `outputs` list of the button click has a `gr.Markdown` component in the second position.)
-    # The `gr.Markdown(label="Generated Files")` in the `outputs` list of the `generate_button.click` call
-    # should be `results_display_markdown`.
-    # This is a common Gradio setup pattern: define UI, then wire events.
-    # I will assume the current definition is sufficient for Gradio to update the component in the "Results" tab.
+    gen_tts_service.change(
+        update_minimax_voice_dropdown,
+        inputs=[gen_tts_service, gen_target_language],
+        outputs=[gen_tts_voice_gender]
+    )
+    
+    gen_target_language.change(
+        update_minimax_voice_dropdown,
+        inputs=[gen_tts_service, gen_target_language],
+        outputs=[gen_tts_voice_gender]
+    )
+    
+    news_selection_checkboxes.change(
+        fn=handle_checkbox_selection,
+        inputs=[news_selection_checkboxes],
+        outputs=[selected_df_indices_state]
+    )
+    
+    generate_button.click(
+        handle_generate_audio_subtitles,
+        inputs=[
+            selected_df_indices_state, # Selected item indices from CheckboxGroup/State
+            news_data_state_gr,         # Full list of fetched news items
+            gen_news_topic,
+            gen_summarizer_choice, gen_ollama_model_name, cfg_ollama_url, # Summarizer
+            cfg_gemini_key, cfg_openrouter_key,                         # Summarizer APIs
+            gen_tts_service, gen_tts_voice_gender,                      # TTS
+            gen_max_chars_segment,                                      # Subtitle option
+            cfg_azure_tts_key, cfg_azure_tts_region,                    # TTS APIs
+            cfg_google_tts_path, cfg_minimax_key, cfg_minimax_group_id, # TTS APIs
+            gen_target_language                                         # Target Language
+        ],
+        outputs=[generation_status_log, results_display_markdown] # Updated to target existing results_display_markdown
+    )
 
 if __name__ == "__main__":
     # Setting share=True is useful for testing in environments like Gitpod or Colab
