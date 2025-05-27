@@ -12,6 +12,7 @@ from mutagen.mp3 import MP3 # For getting audio duration
 import news_fetcher
 import summarizer
 import tts_generator
+from tts_generator import MINIMAX_TTS_VOICE_MAPPING
 import subtitle_generator
 import translator # Import the new translator module
 
@@ -576,6 +577,58 @@ def handle_textbox_selection(text_input_indices_str: str, current_news_data: lis
     return valid_indices
 
 
+def update_minimax_voice_dropdown(tts_service: str, target_language_str: str):
+    """
+    Updates the voice dropdown choices and selected value based on the selected TTS service and target language.
+    Specifically handles Minimax voices.
+    """
+    voice_choices = ["female", "male"]  # Default choices
+    selected_voice = "female"       # Default selected voice
+
+    if tts_service == "minimax":
+        # Parse language code from target_language_str (e.g., "Chinese (zh)" -> "zh")
+        lang_code = "en" # Default language code
+        if target_language_str and "(" in target_language_str and ")" in target_language_str:
+            match = re.search(r'\((.*?)\)', target_language_str)
+            if match:
+                parsed_code = match.group(1)
+                # Validate if the parsed code is a known language for Minimax, otherwise default might be better
+                # For now, we'll use whatever is parsed.
+                lang_code = parsed_code
+            else: # Should not happen if format is "Language (code)"
+                logger.warning(f"Could not parse language code from '{target_language_str}', defaulting to 'en' for Minimax voices.")
+        else: # Handle cases where target_language_str might be empty or not in expected format
+            logger.info(f"Target language string '{target_language_str}' not in expected format for Minimax voice selection, defaulting to 'en'.")
+
+
+        voices_for_lang = MINIMAX_TTS_VOICE_MAPPING.get(lang_code, {})
+        
+        if voices_for_lang: # If language exists in mapping and has voices
+            voice_choices = list(voices_for_lang.keys())
+            if voice_choices:
+                selected_voice = voice_choices[0]
+            else: # Language code was in mapping, but had no voices listed (empty dict)
+                voice_choices = [] # No specific voices available
+                selected_voice = None # Or handle as per Gradio's behavior for empty choices
+        else: # Language code not in MINIMAX_TTS_VOICE_MAPPING or no specific voices
+            # Fallback to default gender-based voices if no specific Minimax voices for the language
+            # Or, indicate that specific selection is not applicable.
+            # For now, if lang_code is not in mapping, let's assume generic voices are not applicable for Minimax
+            # and thus provide no choices, prompting user to select a different TTS or language.
+            # However, the requirement was "keep ['female', 'male'] if language is not in mapping at all".
+            # Let's stick to the requirement more closely.
+            if lang_code not in MINIMAX_TTS_VOICE_MAPPING:
+                 # Keep default ["female", "male"] if language not in mapping
+                 # This case is already handled by initialization, so no change needed here.
+                 pass
+            else: # lang_code was in mapping, but voices_for_lang was empty (e.g. MINIMAX_TTS_VOICE_MAPPING.get(lang_code) returned {})
+                voice_choices = []
+                selected_voice = None
+
+
+    return gr.update(choices=voice_choices, value=selected_voice)
+
+
 # --- Gradio UI Definition ---
 with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle Generator") as app_ui:
     gr.Markdown("# News Aggregator and Audio/Subtitle Generator")
@@ -665,8 +718,20 @@ with gr.Blocks(theme=gr.themes.Soft(), title="News Aggregator & Audio/Subtitle G
 
             with gr.Row():
                 gen_tts_service = gr.Dropdown(label="Select TTS Service", choices=["edge_tts", "azure", "google", "minimax"], value="edge_tts")
-                gen_tts_voice_gender = gr.Dropdown(label="Select Voice Gender (for selected TTS)", choices=["female", "male"], value="female")
+                gen_tts_voice_gender = gr.Dropdown(label="Select Voice (or Gender for non-Minimax TTS)", choices=["female", "male"], value="female", allow_custom_value=False) # allow_custom_value=False for safety
             
+            # Event handlers for updating the voice dropdown
+            gen_tts_service.change(
+                update_minimax_voice_dropdown,
+                inputs=[gen_tts_service, gen_target_language],
+                outputs=[gen_tts_voice_gender]
+            )
+            gen_target_language.change(
+                update_minimax_voice_dropdown,
+                inputs=[gen_tts_service, gen_target_language],
+                outputs=[gen_tts_voice_gender]
+            )
+
             gr.Markdown("### Subtitle Options")
             gen_max_chars_segment = gr.Slider(label="Max Characters per Subtitle Segment", minimum=20, maximum=150, value=50, step=5, interactive=True)
 
